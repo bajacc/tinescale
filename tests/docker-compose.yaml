@@ -1,0 +1,34 @@
+services:
+
+  peer1:
+    build: 
+      context: ../
+      dockerfile: tests/Dockerfile
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    networks:
+      testnet:
+        ipv4_address: 10.10.0.11
+    volumes:
+      - ./peer1.toml:/app/config.toml
+
+  peer2:
+    build: 
+      context: ../
+      dockerfile: tests/Dockerfile
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    networks:
+      testnet:
+        ipv4_address: 10.10.0.12
+    volumes:
+      - ./peer2.toml:/app/config.toml
+
+networks:
+  testnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24

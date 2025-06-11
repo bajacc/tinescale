@@ -1,0 +1,11 @@
+[client]
+interface = "wg0"
+ip = "10.0.0.1/24"
+wg_port = 51820
+private_key = "kJ19wXXf+EYawea+52ot1EmC3isdPwEhRQhA7qIsalg="
+
+[[client.peers]]
+pubkey = "ATYfmQQaG1o5hgGC0pLJqKT97q5873iGfSvNY++ExDg="
+endpoint = "10.10.0.12:51820"
+allowed_ips = ["10.0.0.2/32"]
+persistent_keepalive = 15

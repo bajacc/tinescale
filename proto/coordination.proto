@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package coordination;
+
+service Coordination {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc GetPeer(PeerRequest) returns (PeerResponse);
+}
+
+message RegisterRequest {
+  string pubkey = 1;
+  uint32 wg_port = 2;
+}
+
+message RegisterResponse {
+  string external_ip = 1;
+  uint32 external_port = 2;
+}
+
+message PeerRequest {
+  string requester_pubkey = 1;
+  string target_pubkey = 2;
+}
+
+message PeerResponse {
+  string pubkey = 1;
+  string external_ip = 2;
+  uint32 external_port = 3;
+}
