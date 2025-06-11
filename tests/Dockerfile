@@ -22,10 +22,20 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    socat \
     iproute2 \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    iputils-ping \
+    traceroute \
+    curl \
+    wget \
+    iproute2 \
+    tcpdump \
+    wireguard-tools \
+    dnsutils \
+    net-tools \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/tinescale /usr/local/bin/
 COPY tests/entrypoint.sh /usr/local/bin/

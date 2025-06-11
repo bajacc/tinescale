@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-boringtun = { git = "https://github.com/bajacc/boringtun.git", features = ["device"], branch = "tinescale"}
+boringtun = { git = "https://github.com/cloudflare/boringtun.git", features = ["device"]}
 anyhow = "1.0.98"
 base64 = "0.22.1"
 serde = { version = "1.0.219", features = ["derive"] }
@@ -15,6 +15,7 @@ tonic = { version = "0.13.1", features = ["transport"] }
 x25519-dalek = "2.0.1"
 prost = "0.13.5"
 clap = { version = "4.5.40", features = ["derive"] }
+hex = "0.4.3"
 
 [build-dependencies]
 tonic-build = "0.13.1"

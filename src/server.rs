@@ -1,9 +1,9 @@
-use tonic::{transport::Server, Request, Response, Status};
+use anyhow::Result;
 use coordination::coordination_server::{Coordination, CoordinationServer};
-use coordination::{RegisterRequest, RegisterResponse, PeerRequest, PeerResponse};
+use coordination::{PeerRequest, PeerResponse, RegisterRequest, RegisterResponse};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use anyhow::{anyhow, Result};
+use tonic::{transport::Server, Request, Response, Status};
 
 pub mod coordination {
     tonic::include_proto!("coordination");
@@ -20,11 +20,16 @@ impl Coordination for CoordService {
         &self,
         req: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
-        let addr = req.remote_addr().ok_or(Status::internal("Missing remote IP"))?;
+        let addr = req
+            .remote_addr()
+            .ok_or(Status::internal("Missing remote IP"))?;
         let reg = req.into_inner();
         let ip = addr.ip().to_string();
 
-        self.peers.lock().unwrap().insert(reg.pubkey.clone(), (reg.pubkey, ip.clone(), reg.wg_port as u16));
+        self.peers.lock().unwrap().insert(
+            reg.pubkey.clone(),
+            (reg.pubkey, ip.clone(), reg.wg_port as u16),
+        );
 
         Ok(Response::new(RegisterResponse {
             external_ip: ip,
@@ -32,10 +37,7 @@ impl Coordination for CoordService {
         }))
     }
 
-    async fn get_peer(
-        &self,
-        req: Request<PeerRequest>,
-    ) -> Result<Response<PeerResponse>, Status> {
+    async fn get_peer(&self, req: Request<PeerRequest>) -> Result<Response<PeerResponse>, Status> {
         let target_pubkey = req.into_inner().target_pubkey;
 
         let peers = self.peers.lock().unwrap();

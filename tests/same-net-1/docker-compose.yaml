@@ -1,8 +1,8 @@
 services:
-
   peer1:
-    build: 
-      context: ../
+    container_name: peer1
+    build:
+      context: ../../
       dockerfile: tests/Dockerfile
     cap_add:
       - NET_ADMIN
@@ -14,8 +14,9 @@ services:
       - ./peer1.toml:/app/config.toml
 
   peer2:
-    build: 
-      context: ../
+    container_name: peer2
+    build:
+      context: ../../
       dockerfile: tests/Dockerfile
     cap_add:
       - NET_ADMIN
@@ -28,6 +29,7 @@ services:
 
 networks:
   testnet:
+    name: same-net-1-testnet
     driver: bridge
     ipam:
       config:

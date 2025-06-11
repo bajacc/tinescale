@@ -220,7 +220,7 @@ dependencies = [
 [[package]]
 name = "boringtun"
 version = "0.6.0"
-source = "git+https://github.com/bajacc/boringtun.git?branch=tinescale#e3509e5e47165cf3ccde9f243243f6992d230b7b"
+source = "git+https://github.com/cloudflare/boringtun.git#2f3c85f5c4a601018c10b464b1ca890d9504bf6e"
 dependencies = [
  "aead",
  "base64 0.13.1",
@@ -1287,6 +1287,7 @@ dependencies = [
  "base64 0.22.1",
  "boringtun",
  "clap",
+ "hex",
  "prost",
  "serde",
  "serde_json",

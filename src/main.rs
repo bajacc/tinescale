@@ -1,10 +1,12 @@
-use std::{fs, net::SocketAddr};
 use anyhow::{Ok, Result};
-use serde::Deserialize;
 use clap::Parser;
+use serde::Deserialize;
+use std::{fs, net::SocketAddr};
 
-mod server;
 mod client;
+mod serialization;
+mod server;
+mod wghandle;
 
 #[derive(Parser, Debug)]
 #[command(name = "tinescale", about = "Tinescale VPN peer")]
@@ -46,7 +48,6 @@ struct PeerConfig {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-
     let config_str = fs::read_to_string(&cli.config)?;
     let config: Config = toml::from_str(&config_str)?;
 
@@ -65,5 +66,7 @@ async fn main() -> Result<()> {
             }
         });
     }
-    Ok(())
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
 }
