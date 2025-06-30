@@ -1,0 +1,42 @@
+services:
+  peer1:
+    container_name: peer1
+    build:
+      context: ../../
+      dockerfile: tests/Dockerfile
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    environment:
+      - IFACE=wg0
+      - ADDR=10.0.0.1/24
+    networks:
+      testnet:
+        ipv4_address: 10.10.0.11
+    volumes:
+      - ./peer1.ipc:/app/config.ipc
+
+  peer2:
+    container_name: peer2
+    build:
+      context: ../../
+      dockerfile: tests/Dockerfile
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    environment:
+      - IFACE=wg0
+      - ADDR=10.0.0.2/24
+    networks:
+      testnet:
+        ipv4_address: 10.10.0.12
+    volumes:
+      - ./peer2.ipc:/app/config.ipc
+
+networks:
+  testnet:
+    name: same-net-1-testnet
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
