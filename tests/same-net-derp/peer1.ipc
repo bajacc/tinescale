@@ -4,7 +4,7 @@ listen_port=51820
 replace_peers=true
 public_key=01361f99041a1b5a39860182d292c9a8a4fdeeae7cef78867d2bcd63ef84c438
 replace_allowed_ips=true
-endpoint=10.10.0.12:51820
 allowed_ip=10.0.0.2/32
 persistent_keepalive_interval=15
+derp_server=10.10.0.10:80
 

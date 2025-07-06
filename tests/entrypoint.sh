@@ -15,23 +15,30 @@ if [[ -z "$ADDR" ]]; then
 fi
 
 # Launch tinescale in the background
-tinescale --ipc "$IPC_FILE" &
-APP_PID=$!
+LOG_LEVEL=debug tinescale "$IFACE"
 
-# Wait for the TUN interface to appear
-echo "[INFO] Waiting for interface $IFACE to be created by tinescale..."
-for i in {1..10}; do
-    if ip link show "$IFACE" >/dev/null 2>&1; then
-        echo "[INFO] Interface $IFACE detected"
-        break
-    fi
-    sleep 1
-done
+sleep 2
+
+SOCKET_PATH="/var/run/wireguard/$IFACE.sock"
+if [[ ! -S "$SOCKET_PATH" ]]; then
+    echo "[ERROR] UAPI socket not found at $SOCKET_PATH"
+    exit 1
+fi
+
+if ! ip link show "$IFACE" >/dev/null 2>&1; then
+    echo "[ERROR] Interface $IFACE not found"
+    exit 1
+fi
+
+socat - UNIX-CONNECT:"$SOCKET_PATH" < /app/config.ipc
+printf "get=1\n\n" | socat - UNIX-CONNECT:"$SOCKET_PATH"
 
 # Assign IP to the interface
 echo "[INFO] Assigning $ADDR to $IFACE"
 ip addr add "$ADDR" dev "$IFACE"
 ip link set up dev "$IFACE"
 
-# Wait for tinescale to exit
-wait $APP_PID
+# Wait
+while true; do 
+    sleep 3600
+done
