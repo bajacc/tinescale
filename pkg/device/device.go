@@ -36,6 +36,25 @@ type Device struct {
 		sync.RWMutex
 		endpoints []conn.Endpoint
 	}
+
+	staticIdentity struct {
+		sync.RWMutex
+		privateKey wgdevice.NoisePrivateKey
+		publicKey  wgdevice.NoisePublicKey
+	}
+
+	peers struct {
+		sync.RWMutex
+		keyMap map[wgdevice.NoisePublicKey]*Peer
+	}
+}
+
+type Peer struct {
+	publicKey wgdevice.NoisePublicKey
+	endpoints struct {
+		sync.RWMutex
+		val []conn.Endpoint
+	}
 }
 
 func (device *Device) Wait() chan struct{} {
