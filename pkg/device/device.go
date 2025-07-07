@@ -37,6 +37,8 @@ type Device struct {
 		endpoints []conn.Endpoint
 	}
 
+	// the following fields are mirrors from wg device
+
 	staticIdentity struct {
 		sync.RWMutex
 		privateKey wgdevice.NoisePrivateKey
@@ -44,16 +46,15 @@ type Device struct {
 	}
 
 	peers struct {
-		sync.RWMutex
-		keyMap map[wgdevice.NoisePublicKey]*Peer
+		sync.RWMutex // protects keyMap
+		keyMap       map[wgdevice.NoisePublicKey]*Peer
 	}
 }
 
 type Peer struct {
-	publicKey wgdevice.NoisePublicKey
-	endpoints struct {
-		sync.RWMutex
-		val []conn.Endpoint
+	endpoint struct {
+		sync.Mutex
+		val conn.Endpoint
 	}
 }
 

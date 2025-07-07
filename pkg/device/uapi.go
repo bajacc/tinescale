@@ -199,6 +199,76 @@ func (device *Device) IpcSetOperation(r io.Reader) error {
 	if status != nil {
 		return ipcError(status.ErrorCode(), status.Unwrap())
 	}
+
+	buf, err := device.inner.IpcGet()
+	if err != nil {
+		return err
+	}
+
+	err = device.updateWGInfo(strings.NewReader(buf))
+	if err != nil {
+		return ipcErrorf(ipc.IpcErrorUnknown, "could not parse get=1: %w", err)
+	}
+	return nil
+}
+
+func (device *Device) updateWGInfo(r io.Reader) error {
+
+	device.peers.Lock()
+	defer device.peers.Unlock()
+
+	keyMap := map[wgdevice.NoisePublicKey]*Peer{}
+	var currentPeer *Peer
+
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+
+		switch key {
+		case "private_key":
+			device.staticIdentity.Lock()
+			defer device.staticIdentity.Unlock()
+			if err := device.staticIdentity.privateKey.FromMaybeZeroHex(value); err != nil {
+				return err
+			}
+			device.staticIdentity.publicKey = publicKey(&device.staticIdentity.privateKey)
+		case "public_key":
+			var publicKey wgdevice.NoisePublicKey
+			if err := publicKey.FromHex(value); err != nil {
+				return err
+			}
+			val, ok := device.peers.keyMap[publicKey]
+			if ok {
+				currentPeer = val
+			} else {
+				currentPeer = new(Peer)
+			}
+			keyMap[publicKey] = currentPeer
+
+		case "endpoint":
+			endpoint, err := device.net.bind.ParseEndpoint(value)
+			if err != nil {
+				return err
+			}
+			currentPeer.endpoint.Lock()
+			currentPeer.endpoint.val = endpoint
+			currentPeer.endpoint.Unlock()
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	device.peers.keyMap = keyMap
+
 	return nil
 }
 
