@@ -113,7 +113,6 @@ func (ir *InterceptReader) handleLine(key, value string) (bool, error) {
 		}
 
 	case "derp_server":
-
 		add := true
 		verb := "Adding"
 		if len(value) > 0 && value[0] == '-' {

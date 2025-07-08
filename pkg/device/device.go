@@ -8,6 +8,7 @@ import (
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
+	"tailscale.com/derp"
 )
 
 type DeviceInterface interface {
@@ -37,6 +38,8 @@ type Device struct {
 		endpoints []conn.Endpoint
 	}
 
+	derpClient *derp.Client
+
 	// the following fields are mirrors from wg device
 
 	staticIdentity struct {
@@ -49,6 +52,10 @@ type Device struct {
 		sync.RWMutex // protects keyMap
 		keyMap       map[wgdevice.NoisePublicKey]*Peer
 	}
+}
+
+func (d *Device) sendViaDERP(bufs [][]byte, endpoint conn.Endpoint) error {
+	d.De
 }
 
 type Peer struct {
