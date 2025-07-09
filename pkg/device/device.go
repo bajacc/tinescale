@@ -55,7 +55,7 @@ type Device struct {
 }
 
 func (d *Device) sendViaDERP(bufs [][]byte, endpoint conn.Endpoint) error {
-	d.De
+	return nil
 }
 
 type Peer struct {
