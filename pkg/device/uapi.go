@@ -370,52 +370,28 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 		return 0, nil
 
 	case "stun_server":
-		add := true
-		verb := "Adding"
-		if len(value) > 0 && value[0] == '-' {
-			add = false
-			verb = "Removing"
-			value = value[1:]
-		}
-		ir.device.log.Verbosef("UAPI: %s stun_server", verb)
+		ir.device.log.Verbose("UAPI: Adding stun_server")
 
 		endpoint, err := ir.device.net.bind.ParseEndpoint(value)
 		if err != nil {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set stun_server %v: %w", value, err)
 			return 0, ir.ipcErr
 		}
-		if add {
-			ir.device.stunServers.Lock()
-			defer ir.device.stunServers.Unlock()
-			ir.device.stunServers.endpoints = append(ir.device.stunServers.endpoints, endpoint)
-		} else {
-			ir.device.removeStunServer(endpoint)
-		}
+		ir.device.stunServers.Lock()
+		defer ir.device.stunServers.Unlock()
+		ir.device.stunServers.endpoints = append(ir.device.stunServers.endpoints, endpoint)
 		return 0, nil
-
 	case "derp_server":
-		add := true
-		verb := "Adding"
-		if len(value) > 0 && value[0] == '-' {
-			add = false
-			verb = "Removing"
-			value = value[1:]
-		}
-		ir.device.log.Verbosef("UAPI: %s derp_server", verb)
+		ir.device.log.Verbose("UAPI: Adding derp_server")
 
 		endpoint, err := ir.device.net.bind.ParseEndpoint(value)
 		if err != nil {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set derp_server %v: %w", value, err)
 			return 0, ir.ipcErr
 		}
-
-		if add {
-			ir.device.derpServers.Lock()
-			defer ir.device.derpServers.Unlock()
-			ir.device.derpServers.endpoints = append(ir.device.derpServers.endpoints, endpoint)
-		} else {
-			ir.device.removeDerpServer(endpoint)
-		}
+		ir.device.derpServers.Lock()
+		defer ir.device.derpServers.Unlock()
+		ir.device.derpServers.endpoints = append(ir.device.derpServers.endpoints, endpoint)
 		return 0, nil
 	case "private_key":
 		var sk wgdevice.NoisePrivateKey

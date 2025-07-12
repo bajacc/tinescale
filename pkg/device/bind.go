@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net/netip"
 
+	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
+	"tailscale.com/types/key"
 )
 
 type Bind struct {
@@ -81,9 +83,31 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	return fns, actualPort, err
 }
 func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
-	_, ok := endpoint.(*Endpoint)
+	ep, ok := endpoint.(*Endpoint)
 	if !ok {
 		return fmt.Errorf("Error Enpoint is not a tinescale endpoint")
+	}
+	b.device.peers.Lock()
+	defer b.device.peers.Unlock()
+	peer, ok := b.device.peers.keyMap[ep.origPubKey]
+	if !ok {
+		return fmt.Errorf("peer with public key %s not found", ep.origPubKey)
+	}
+
+	peer.endpoint.Lock()
+	defer peer.endpoint.Unlock()
+
+	return nil
+}
+
+func (d *Device) sendViaDERP(bufs [][]byte, publicKey wgdevice.NoisePublicKey) error {
+	// Convert wgdevice.NoisePublicKey to the key type expected by DERP client
+	derpKey := key.NodePublicFromRaw32(mem.B(publicKey[:]))
+
+	for _, buf := range bufs {
+		if err := d.derpClient.Send(derpKey, buf); err != nil {
+			return err
+		}
 	}
 	return nil
 }
