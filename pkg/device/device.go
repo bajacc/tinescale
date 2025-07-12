@@ -52,6 +52,11 @@ type Device struct {
 		sync.RWMutex // protects keyMap
 		keyMap       map[wgdevice.NoisePublicKey]*Peer
 	}
+
+	listenPort struct {
+		sync.RWMutex
+		val uint16
+	}
 }
 
 func (d *Device) sendViaDERP(bufs [][]byte, endpoint conn.Endpoint) error {

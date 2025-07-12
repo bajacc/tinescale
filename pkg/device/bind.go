@@ -3,9 +3,9 @@ package device
 import (
 	"fmt"
 	"net/netip"
-	"strings"
 
 	"golang.zx2c4.com/wireguard/conn"
+	wgdevice "golang.zx2c4.com/wireguard/device"
 )
 
 type Bind struct {
@@ -14,65 +14,46 @@ type Bind struct {
 }
 
 type Endpoint struct {
-	proto string
-	inner conn.Endpoint
+	origPubKey wgdevice.NoisePublicKey
 }
 
 // ClearSrc implements conn.Endpoint.
-func (e *Endpoint) ClearSrc() {
-	e.inner.ClearSrc()
-}
+func (e *Endpoint) ClearSrc() {}
 
 // DstIP implements conn.Endpoint.
 func (e *Endpoint) DstIP() netip.Addr {
-	return e.inner.DstIP()
+	return netip.Addr{}
 }
 
 // DstToBytes implements conn.Endpoint.
 func (e *Endpoint) DstToBytes() []byte {
-	return e.inner.DstToBytes()
+	return []byte{}
 }
 
 // DstToString implements conn.Endpoint.
 func (e *Endpoint) DstToString() string {
-	return e.inner.DstToString()
+	return ""
 }
 
 // SrcIP implements conn.Endpoint.
 func (e *Endpoint) SrcIP() netip.Addr {
-	return e.inner.SrcIP()
+	return netip.Addr{}
 }
 
 // SrcToString implements conn.Endpoint.
 func (e *Endpoint) SrcToString() string {
-	return e.inner.SrcToString()
+	return ""
 }
 
 func (b *Bind) ParseEndpoint(s string) (conn.Endpoint, error) {
-	proto, value, ok := strings.Cut(s, "://")
-	if !ok {
-		inner, err := b.inner.ParseEndpoint(s)
-		if err != nil {
-			return nil, err
-		}
-		return &Endpoint{
-			inner: inner,
-			proto: "udp",
-		}, nil
-	}
-	inner, err := b.inner.ParseEndpoint(value)
+	var publicKey wgdevice.NoisePublicKey
+	err := publicKey.FromHex(s)
 	if err != nil {
 		return nil, err
 	}
-	switch proto {
-	case "derp":
-		return &Endpoint{
-			inner: inner,
-			proto: "derp",
-		}, nil
-	default:
-		return nil, fmt.Errorf("Error parsing %s: proto %s not known", s, proto)
-	}
+	return &Endpoint{
+		origPubKey: publicKey,
+	}, nil
 }
 
 func (b *Bind) BatchSize() int {
@@ -84,7 +65,7 @@ func (b *Bind) Close() error {
 }
 
 func (b *Bind) SetMark(mark uint32) error {
-	b.inner.SetMark(mark)
+	return b.inner.SetMark(mark)
 }
 
 func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
@@ -100,16 +81,9 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	return fns, actualPort, err
 }
 func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
-	ep, ok := endpoint.(*Endpoint)
+	_, ok := endpoint.(*Endpoint)
 	if !ok {
 		return fmt.Errorf("Error Enpoint is not a tinescale endpoint")
 	}
-	switch ep.proto {
-	case "udp":
-		return b.inner.Send(bufs, ep.inner)
-	case "derp":
-		return b.device.sendViaDERP(bufs, ep.inner)
-	default:
-		return fmt.Errorf("unknown protocol: %s", ep.proto)
-	}
+	return nil
 }
