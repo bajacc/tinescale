@@ -12,12 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/ipc"
-	"tailscale.com/derp/derphttp"
-	tskey "tailscale.com/types/key"
 )
 
 type IPCError struct {
@@ -408,30 +405,9 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set derp_server %v: %w", value, err)
 			return 0, ir.ipcErr
 		}
-		ir.log.Verbosef("UAPI(tinescale): Adding derp_server")
-		ir.device.staticIdentity.RLock()
-		privateKeyHex := ir.device.staticIdentity.privateKeyHex
-		ir.device.staticIdentity.RUnlock()
-
-		derpKey, err := tskey.ParseNodePrivateUntyped(mem.S(privateKeyHex))
-		if err != nil {
-			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to parse private key for derp client: %w", err)
-			return 0, ir.ipcErr
-		}
-
-		client, err := derphttp.NewClient(derpKey, value, ir.device.log.Verbosef, nil)
-		if err != nil {
-			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to create derp client for %v: %w", value, err)
-			return 0, ir.ipcErr
-		}
-
 		ir.device.derp.Lock()
 		defer ir.device.derp.Unlock()
-		derp := &Derp{
-			val:  client,
-			addr: value,
-		}
-		ir.device.derp.clients = append(ir.device.derp.clients, derp)
+		ir.device.derp.clients = append(ir.device.derp.clients, NewDerp(value))
 		return 0, nil
 	case "private_key":
 		var sk wgdevice.NoisePrivateKey

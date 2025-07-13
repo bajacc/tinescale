@@ -5,14 +5,9 @@ import (
 	"net"
 	"sync"
 
-	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
-	"tailscale.com/derp"
-	"tailscale.com/derp/derphttp"
-	"tailscale.com/types/key"
-	tskey "tailscale.com/types/key"
 )
 
 type DeviceInterface interface {
@@ -74,95 +69,6 @@ type Stun struct {
 	sync.RWMutex
 	conn net.Conn
 	addr string
-}
-
-type Derp struct {
-	sync.RWMutex
-	val  *derphttp.Client
-	addr string
-}
-
-func (d *Derp) New(addr string) *Derp {
-	return &Derp{
-		addr: addr,
-	}
-}
-
-func (d *Derp) init(device *Device) error {
-	d.RLock()
-	client := d.val
-	d.RUnlock()
-	if client != nil {
-		return nil
-	}
-	device.staticIdentity.RLock()
-	privateKeyHex := device.staticIdentity.privateKeyHex
-	device.staticIdentity.RUnlock()
-
-	derpKey, err := tskey.ParseNodePrivateUntyped(mem.S(privateKeyHex))
-	if err != nil {
-		return err
-	}
-
-	d.Lock()
-	defer d.Unlock()
-	d.val, err = derphttp.NewClient(derpKey, d.addr, device.log.Verbosef, nil)
-	return err
-}
-
-func (d *Derp) Send(bufs [][]byte, publicKey wgdevice.NoisePublicKey, device *Device) error {
-	// Convert wgdevice.NoisePublicKey to the key type expected by DERP client
-	if err := d.init(device); err != nil {
-		return err
-	}
-	derpKey := key.NodePublicFromRaw32(mem.B(publicKey[:]))
-
-	d.RLock()
-	defer d.RUnlock()
-	for _, buf := range bufs {
-		if err := d.val.Send(derpKey, buf); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (d *Derp) Recv(bufs [][]byte, sizes []int, device *Device) (int, error) {
-	if err := d.init(device); err != nil {
-		return 0, err
-	}
-	d.RLock()
-	defer d.RUnlock()
-
-	count := 0
-	for i := range bufs {
-		msg, err := d.val.Recv()
-		if err != nil {
-			return count, err
-		}
-		packet, ok := msg.(*derp.ReceivedPacket)
-		if !ok {
-			continue // Skip invalid message types
-		}
-
-		// Check if buffer is large enough
-		if len(bufs[i]) < len(packet.Data) {
-			// Buffer too small, skip this packet
-			device.log.Verbosef("DERP: dropping packet of size %d (buffer size %d)", len(packet.Data), len(bufs[i]))
-			continue
-		}
-
-		// Copy packet data to buffer
-		n := copy(bufs[i], packet.Data)
-		sizes[i] = n
-		count++
-
-		// If we don't have more space, break
-		if i >= len(bufs)-1 {
-			break
-		}
-	}
-	return count, nil
 }
 
 func (device *Device) Wait() chan struct{} {
