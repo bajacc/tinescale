@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"net/netip"
 
-	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"tailscale.com/derp"
-	"tailscale.com/types/key"
 )
 
 type Bind struct {
@@ -146,14 +144,11 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 		fns = append(fns, fn)
 	}
 
-	// Add single DERP receive function that handles all DERP clients
-	if len(b.device.derp.clients) > 0 {
-		// todo: this is ugly, make it better
-		derpReceiveFunc := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (n int, err error) {
-			return b.receiveDERPFromAnyClient(bufs, sizes, eps)
-		}
-		fns = append(fns, derpReceiveFunc)
+	// TODO: this is ugly, make it better
+	derpReceiveFunc := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+		return b.receiveDERPFromAnyClient(bufs, sizes, eps)
 	}
+	fns = append(fns, derpReceiveFunc)
 
 	return fns, actualPort, err
 }
@@ -229,17 +224,9 @@ func (b *Bind) receiveDERPNonBlocking(derpClient *Derp, bufs [][]byte, sizes []i
 
 func (b *Bind) receiveDERPFromAnyClient(bufs [][]byte, sizes []int, eps []conn.Endpoint) (n int, err error) {
 	b.device.derp.RLock()
-	clients := make([]*Derp, len(b.device.derp.clients))
-	copy(clients, b.device.derp.clients)
-	b.device.derp.RUnlock()
+	defer b.device.derp.RUnlock()
+	clients := b.device.derp.clients
 
-	if len(clients) == 0 {
-		return 0, nil
-	}
-
-	// Try to receive from the first available client
-	// In a more sophisticated implementation, we could use select with channels
-	// to receive from any client that has messages available
 	for _, client := range clients {
 		count, err := b.receiveDERPNonBlocking(client, bufs, sizes, eps)
 		if err != nil {
@@ -248,12 +235,6 @@ func (b *Bind) receiveDERPFromAnyClient(bufs [][]byte, sizes []int, eps []conn.E
 		if count > 0 {
 			return count, nil
 		}
-	}
-
-	// If no clients had messages, block on the first client
-	// This ensures the ReceiveFunc blocks as expected by WireGuard
-	if len(clients) > 0 {
-		return b.receiveDERPNonBlocking(clients[0], bufs, sizes, eps)
 	}
 
 	return 0, nil
@@ -295,26 +276,12 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 	// else send via DERP
 	b.device.derp.RLock()
 	defer b.device.derp.RUnlock()
-	for _, derpClient := range b.device.derp.clients {
-		err = derpClient.Send(bufs, ep.origPubKey)
+	for _, client := range b.device.derp.clients {
+		err = client.Send(bufs, ep.origPubKey, b.device)
 		if err == nil {
 			return nil
 		}
 	}
 
 	return err
-}
-
-func (d *Derp) Send(bufs [][]byte, publicKey wgdevice.NoisePublicKey) error {
-	// Convert wgdevice.NoisePublicKey to the key type expected by DERP client
-	d.RLock()
-	defer d.RUnlock()
-	derpKey := key.NodePublicFromRaw32(mem.B(publicKey[:]))
-
-	for _, buf := range bufs {
-		if err := d.val.Send(derpKey, buf); err != nil {
-			return err
-		}
-	}
-	return nil
 }

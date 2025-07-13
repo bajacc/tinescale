@@ -410,10 +410,10 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 		}
 		ir.log.Verbosef("UAPI(tinescale): Adding derp_server")
 		ir.device.staticIdentity.RLock()
-		privateKey := ir.device.staticIdentity.privateKey
+		privateKeyHex := ir.device.staticIdentity.privateKeyHex
 		ir.device.staticIdentity.RUnlock()
 
-		derpKey, err := tskey.ParseNodePrivateUntyped(mem.B(privateKey[:]))
+		derpKey, err := tskey.ParseNodePrivateUntyped(mem.S(privateKeyHex))
 		if err != nil {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to parse private key for derp client: %w", err)
 			return 0, ir.ipcErr
@@ -443,6 +443,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 		ir.log.Verbosef("UAPI(tinescale): Updating private key")
 		ir.device.staticIdentity.Lock()
 		defer ir.device.staticIdentity.Unlock()
+		ir.device.staticIdentity.privateKeyHex = value
 		ir.device.staticIdentity.privateKey = sk
 		ir.device.staticIdentity.publicKey = publicKey(&sk)
 		return ir.bufferBytesAndRead(p)
