@@ -18,11 +18,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     net-tools \
  && apt-get clean
 
-# Copy Go project
+# Copy go.mod first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code after dependencies
 COPY . .
 
 # Build tinescale binary
-RUN go build -o tinescale ./cmd/tinescale && cp tinescale /usr/local/bin/
+RUN go build -o tinescale ./cmd/tinescale && mv tinescale /usr/local/bin/
 
 COPY tests/entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh

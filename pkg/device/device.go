@@ -100,8 +100,8 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *wgdevice.Logger) De
 		tunDevice,
 	}
 	device := new(Device)
-	device.inner = wgdevice.NewDevice(tun, bind, logger)
 	device.net.bind = NewBind(bind, device)
+	device.inner = wgdevice.NewDevice(tun, device.net.bind, logger)
 	device.log = logger
 	return device
 }

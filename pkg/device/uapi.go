@@ -196,28 +196,28 @@ func NewInterceptReader(r io.Reader, device *Device) *InterceptReader {
 	}
 }
 
-func (ir *InterceptReader) SetPeerFromConfig() error {
+func (ir *InterceptReader) SetPeerFromConfig() {
 	config := ir.peerConfig
 
 	if config == nil {
-		return ipcErrorf(ipc.IpcErrorInvalid, "no peer public key set")
+		return
 	}
 
 	if config.ignore {
-		ir.log.Verbosef("UAPI: ignoring peer with public key %s", config.publicKey)
-		return nil
+		ir.log.Verbosef("UAPI(tinescale): ignoring peer with public key %s", config.publicKey)
+		return
 	}
 
 	ir.device.peers.Lock()
 	defer ir.device.peers.Unlock()
 	if config.remove {
-		ir.log.Verbosef("UAPI: removing peer with public key %s", config.publicKey)
+		ir.log.Verbosef("UAPI(tinescale): removing peer with public key %s", config.publicKey)
 		delete(ir.device.peers.keyMap, config.publicKey)
-		return nil
+		return
 	}
 
 	if !config.updateOnly {
-		ir.log.Verbosef("UAPI: creating peer with public key %s", config.publicKey)
+		ir.log.Verbosef("UAPI(tinescale): creating peer with public key %s", config.publicKey)
 		ir.device.peers.keyMap[config.publicKey] = &Peer{}
 	}
 	peer := ir.device.peers.keyMap[config.publicKey]
@@ -230,8 +230,9 @@ func (ir *InterceptReader) SetPeerFromConfig() error {
 
 	// configure the peer endpoint in wireguard device
 	// use the public key so that we can find the endpoint later in bind
-	ir.bufferedBytes = append(ir.bufferedBytes, fmt.Sprintf("endpoint=%s\n", config.publicKeyString)...)
-	return nil
+	endpointLine := fmt.Sprintf("endpoint=%s\n", config.publicKeyString)
+	ir.log.Verbosef("UAPI(tinescale): send endpoint line %s", endpointLine)
+	ir.bufferedBytes = append(ir.bufferedBytes, endpointLine...)
 }
 
 func (ir *InterceptReader) Read(p []byte) (int, error) {
@@ -243,8 +244,9 @@ func (ir *InterceptReader) Read(p []byte) (int, error) {
 
 	for ir.scanner.Scan() {
 		line := ir.scanner.Text()
-		ir.device.log.Verbosef("UAPI: read %s", line)
+		ir.device.log.Verbosef("UAPI(tinescale): read %s", line)
 		if line == "" {
+			ir.SetPeerFromConfig()
 			return ir.bufferBytesAndRead(p)
 		}
 		key, value, ok := strings.Cut(line, "=")
@@ -257,10 +259,7 @@ func (ir *InterceptReader) Read(p []byte) (int, error) {
 		}
 	}
 
-	if ir.peerConfig != nil && ir.SetPeerFromConfig() != nil {
-		return 0, ir.ipcErr
-	}
-
+	ir.SetPeerFromConfig()
 	if len(ir.bufferedBytes) > 0 {
 		return ir.readBufferedBytes(p)
 	}
@@ -302,9 +301,9 @@ func (ir *InterceptReader) readKeyValue(key, value string, p []byte) (int, error
 
 func (ir *InterceptReader) readPublicKey(value string, p []byte) (int, error) {
 
-	if ir.peerConfig != nil && ir.SetPeerFromConfig() != nil {
-		return 0, ir.ipcErr
-	}
+	// set the previous peer config if any
+	ir.SetPeerFromConfig()
+
 	ir.peerConfig = &PeerConfig{}
 
 	var publicKey wgdevice.NoisePublicKey
@@ -343,7 +342,7 @@ func (ir *InterceptReader) readPeerLine(key, value string, p []byte) (int, error
 		ir.peerConfig.remove = true
 		return ir.bufferBytesAndRead(p)
 	case "endpoint":
-		ir.log.Verbosef("%v - UAPI: IGNORE Updating endpoint", ir.peerConfig.publicKey)
+		ir.log.Verbosef("UAPI(tinescale): Registering endpoint")
 		ep, err := ir.device.net.bind.ParseInnerEndpoint(value)
 		if err != nil {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to parse endpoint: %w", err)
@@ -353,6 +352,7 @@ func (ir *InterceptReader) readPeerLine(key, value string, p []byte) (int, error
 		// do not propagate endpoint to wireguard device yet
 		return 0, nil
 	default:
+		ir.log.Verbosef("UAPI(tinescale): peer command '%s=%s'", key, value)
 		return ir.bufferBytesAndRead(p)
 	}
 }
@@ -366,26 +366,22 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to replace stun_server, invalid value: %v", value)
 			return 0, ir.ipcErr
 		}
-		ir.device.log.Verbosef("UAPI: Removing all stun_server")
+		ir.device.log.Verbosef("UAPI(tinescale): Removing all stun_server")
 		ir.device.stun.Lock()
 		defer ir.device.stun.Unlock()
 		ir.device.stun.clients = nil
 		return 0, nil
-
 	case "replace_derp_servers":
 		if value != "true" {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to replace derp_server, invalid value: %v", value)
 			return 0, ir.ipcErr
 		}
-		ir.device.log.Verbosef("UAPI: Removing all derp_server")
+		ir.device.log.Verbosef("UAPI(tinescale): Removing all derp_server")
 		ir.device.derp.Lock()
 		defer ir.device.derp.Unlock()
 		ir.device.derp.clients = nil
 		return 0, nil
-
 	case "stun_server":
-		ir.log.Verbosef("UAPI: Adding stun_server")
-
 		raddr, err := net.ResolveUDPAddr("udp", value)
 		if err != nil {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to resolve stun_server address %v: %w", value, err)
@@ -397,6 +393,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to dial stun_server %v: %w", value, err)
 			return 0, ir.ipcErr
 		}
+		ir.log.Verbosef("UAPI(tinescale): Adding stun_server")
 		ir.device.stun.Lock()
 		defer ir.device.stun.Unlock()
 		stun := &Stun{
@@ -406,13 +403,12 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 		ir.device.stun.clients = append(ir.device.stun.clients, stun)
 		return 0, nil
 	case "derp_server":
-		ir.device.log.Verbosef("UAPI: Adding derp_server")
-
 		_, err := url.Parse(value)
 		if err != nil {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set derp_server %v: %w", value, err)
 			return 0, ir.ipcErr
 		}
+		ir.log.Verbosef("UAPI(tinescale): Adding derp_server")
 		ir.device.staticIdentity.RLock()
 		privateKey := ir.device.staticIdentity.privateKey
 		ir.device.staticIdentity.RUnlock()
@@ -423,7 +419,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			return 0, ir.ipcErr
 		}
 
-		client, err := derphttp.NewClient(derpKey, "http://"+value, ir.device.log.Verbosef, nil)
+		client, err := derphttp.NewClient(derpKey, value, ir.device.log.Verbosef, nil)
 		if err != nil {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to create derp client for %v: %w", value, err)
 			return 0, ir.ipcErr
@@ -444,7 +440,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set private_key: %w", err)
 			return 0, ir.ipcErr
 		}
-		ir.log.Verbosef("UAPI: Updating private key")
+		ir.log.Verbosef("UAPI(tinescale): Updating private key")
 		ir.device.staticIdentity.Lock()
 		defer ir.device.staticIdentity.Unlock()
 		ir.device.staticIdentity.privateKey = sk
@@ -456,6 +452,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to parse listen_port: %w", err)
 			return 0, ir.ipcErr
 		}
+		ir.log.Verbosef("UAPI(tinescale): Updating listen port to %d", port)
 		ir.device.listenPort.Lock()
 		defer ir.device.listenPort.Unlock()
 		ir.device.listenPort.val = uint16(port)
@@ -465,11 +462,13 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set replace_peers, invalid value: %v", value)
 			return 0, ir.ipcErr
 		}
+		ir.log.Verbosef("UAPI(tinescale): replace peers")
 		ir.device.peers.Lock()
 		defer ir.device.peers.Unlock()
 		ir.device.peers.keyMap = make(map[wgdevice.NoisePublicKey]*Peer)
 		return ir.bufferBytesAndRead(p)
 	default:
+		ir.log.Verbosef("UAPI(tinescale): other command '%s=%s'", key, value)
 		return ir.bufferBytesAndRead(p)
 	}
 }
