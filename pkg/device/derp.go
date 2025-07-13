@@ -25,9 +25,13 @@ func NewDerp(addr string) *Derp {
 func (d *Derp) init(device *Device) error {
 	d.RLock()
 	client := d.val
+	addr := d.addr
 	d.RUnlock()
 	if client != nil {
 		return nil
+	}
+	if addr == "" {
+		return nil // No DERP server configured yet
 	}
 	device.staticIdentity.RLock()
 	privateKeyHex := device.staticIdentity.privateKeyHex

@@ -26,7 +26,7 @@ RUN go mod download
 COPY . .
 
 # Build tinescale binary
-RUN go build -o tinescale ./cmd/tinescale && mv tinescale /usr/local/bin/
+RUN go build -race -o tinescale ./cmd/tinescale && mv tinescale /usr/local/bin/
 
 COPY tests/entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh
