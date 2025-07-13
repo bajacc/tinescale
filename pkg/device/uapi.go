@@ -204,20 +204,20 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 	}
 
 	if config.ignore {
-		ir.log.Verbosef("UAPI(tinescale): ignoring peer with public key %s", config.publicKey)
+		ir.log.Verbosef("UAPI(tinescale): ignoring peer with public key %s", config.publicKeyString)
 		return
 	}
 
 	ir.device.peers.Lock()
 	defer ir.device.peers.Unlock()
 	if config.remove {
-		ir.log.Verbosef("UAPI(tinescale): removing peer with public key %s", config.publicKey)
+		ir.log.Verbosef("UAPI(tinescale): removing peer with public key %s", config.publicKeyString)
 		delete(ir.device.peers.keyMap, config.publicKey)
 		return
 	}
 
 	if !config.updateOnly {
-		ir.log.Verbosef("UAPI(tinescale): creating peer with public key %s", config.publicKey)
+		ir.log.Verbosef("UAPI(tinescale): creating peer with public key %s", config.publicKeyString)
 		ir.device.peers.keyMap[config.publicKey] = &Peer{}
 	}
 	peer := ir.device.peers.keyMap[config.publicKey]

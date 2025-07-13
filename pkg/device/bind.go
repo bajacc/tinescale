@@ -14,17 +14,46 @@ import (
 type Bind struct {
 	inner  conn.Bind
 	device *Device
+	log    *wgdevice.Logger
 }
 
 type Endpoint struct {
 	origPubKey wgdevice.NoisePublicKey
 }
 
-func NewBind(inner conn.Bind, device *Device) *Bind {
+func NewBind(inner conn.Bind, device *Device, logger *wgdevice.Logger) *Bind {
 	return &Bind{
 		inner:  inner,
 		device: device,
+		log:    logger,
 	}
+}
+
+func (b *Bind) udpToTinescaleEndpoint(udpEp conn.Endpoint) *Endpoint {
+	// Look through all peers to find one with matching UDP endpoint
+	b.device.peers.RLock()
+	defer b.device.peers.RUnlock()
+
+	for pubKey, peer := range b.device.peers.keyMap {
+		ep := func() *Endpoint {
+			peer.endpoint.RLock()
+			defer peer.endpoint.RUnlock()
+			if peer.endpoint.uapi != nil && peer.endpoint.uapi.DstToString() == udpEp.DstToString() {
+				return &Endpoint{origPubKey: pubKey}
+			}
+
+			for _, stunEndpoint := range peer.endpoint.stun {
+				if stunEndpoint.DstToString() == udpEp.DstToString() {
+					return &Endpoint{origPubKey: pubKey}
+				}
+			}
+			return nil
+		}()
+		if ep != nil {
+			return ep
+		}
+	}
+	return nil
 }
 
 // ClearSrc implements conn.Endpoint.
@@ -32,6 +61,7 @@ func (e *Endpoint) ClearSrc() {}
 
 // DstIP implements conn.Endpoint.
 func (e *Endpoint) DstIP() netip.Addr {
+	// TODO do we need that?
 	// Generate a deterministic IP from the public key for rate limiting
 	// Use the first 4 bytes of the public key as an IPv4 address in the 10.0.0.0/8 range
 	if len(e.origPubKey) >= 4 {
@@ -88,14 +118,37 @@ func (b *Bind) SetMark(mark uint32) error {
 }
 
 func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
-	// fns is the receive functions (UAPI and STUN endpoints)
-	fns, actualPort, err := b.inner.Open(port)
+
+	innerFns, actualPort, err := b.inner.Open(port)
 	if err != nil {
-		return fns, actualPort, err
+		return innerFns, actualPort, err
+	}
+
+	var fns []conn.ReceiveFunc
+	// fns is the receive functions (UAPI and STUN endpoints)
+	for _, innerFn := range innerFns {
+		innerFn := innerFn // capture range variable
+		fn := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+			n, err := innerFn(bufs, sizes, eps)
+			if err != nil {
+				return n, err
+			}
+
+			for i := range n {
+				tinescaleEp := b.udpToTinescaleEndpoint(eps[i])
+				if tinescaleEp == nil {
+					return n, fmt.Errorf("no tinescale endpoint found for %s", eps[i].DstToString())
+				}
+				eps[i] = tinescaleEp
+			}
+			return n, nil
+		}
+		fns = append(fns, fn)
 	}
 
 	// Add single DERP receive function that handles all DERP clients
 	if len(b.device.derp.clients) > 0 {
+		// todo: this is ugly, make it better
 		derpReceiveFunc := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (n int, err error) {
 			return b.receiveDERPFromAnyClient(bufs, sizes, eps)
 		}
@@ -224,9 +277,11 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 	var err error
 
 	// send via uapi configured endpoints
-	err = b.inner.Send(bufs, peer.endpoint.uapi)
-	if err == nil {
-		return nil
+	if peer.endpoint.uapi != nil {
+		err = b.inner.Send(bufs, peer.endpoint.uapi)
+		if err == nil {
+			return nil
+		}
 	}
 
 	// else send via stun configured endpoints
