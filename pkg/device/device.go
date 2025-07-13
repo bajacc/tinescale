@@ -27,15 +27,15 @@ type Device struct {
 
 	net struct {
 		sync.RWMutex
-		bind conn.Bind
+		bind *Bind
 	}
-	stunServers struct {
+	stun struct {
 		sync.RWMutex
-		endpoints []conn.Endpoint
+		clients []*Stun
 	}
 	derp struct {
 		sync.RWMutex
-		clients []*derphttp.Client
+		clients []*Derp
 	}
 
 	// the following fields are mirrors from wg device
@@ -59,10 +59,22 @@ type Device struct {
 
 type Peer struct {
 	endpoint struct {
-		sync.Mutex
-		derp *derphttp.Client
-		val  conn.Endpoint // udp endpoint
+		sync.RWMutex
+		uapi conn.Endpoint   // uapi configured endpoint
+		stun []conn.Endpoint // stun configured endpoints
 	}
+}
+
+type Stun struct {
+	sync.RWMutex
+	conn net.Conn
+	addr string
+}
+
+type Derp struct {
+	sync.RWMutex
+	val  *derphttp.Client
+	addr string
 }
 
 func (device *Device) Wait() chan struct{} {
@@ -89,7 +101,7 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *wgdevice.Logger) De
 	}
 	device := new(Device)
 	device.inner = wgdevice.NewDevice(tun, bind, logger)
+	device.net.bind = NewBind(bind, device)
 	device.log = logger
-	device.net.bind = bind
 	return device
 }

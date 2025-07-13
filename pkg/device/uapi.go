@@ -7,12 +7,17 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 
+	"go4.org/mem"
+	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/ipc"
+	"tailscale.com/derp/derphttp"
+	tskey "tailscale.com/types/key"
 )
 
 type IPCError struct {
@@ -61,7 +66,7 @@ type PeerConfig struct {
 	ignore          bool
 	updateOnly      bool
 	remove          bool
-	endpoint        *Endpoint
+	endpoint        conn.Endpoint
 }
 
 func (device *Device) IpcGetOperation(w io.Writer) error {
@@ -78,18 +83,18 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 
 	func() {
 		// lock required resources
-		device.stunServers.RLock()
-		defer device.stunServers.RUnlock()
+		device.stun.RLock()
+		defer device.stun.RUnlock()
 
-		device.derpServers.RLock()
-		defer device.derpServers.RUnlock()
+		device.derp.RLock()
+		defer device.derp.RUnlock()
 
 		// serialize device related values
-		for _, endpoint := range device.stunServers.endpoints {
-			sendf("stun_server=%s", endpoint.DstToString())
+		for _, client := range device.stun.clients {
+			sendf("stun_server=%s", client.addr)
 		}
-		for _, endpoint := range device.derpServers.endpoints {
-			sendf("derp_server=%s", endpoint.DstToString())
+		for _, client := range device.derp.clients {
+			sendf("derp_server=%s", client.addr)
 		}
 	}()
 
@@ -217,9 +222,11 @@ func (ir *InterceptReader) SetPeerFromConfig() error {
 	}
 	peer := ir.device.peers.keyMap[config.publicKey]
 
-	peer.endpoint.Lock()
-	defer peer.endpoint.Unlock()
-	peer.endpoint.val = config.endpoint
+	func() {
+		peer.endpoint.Lock()
+		defer peer.endpoint.Unlock()
+		peer.endpoint.uapi = config.endpoint
+	}()
 
 	// configure the peer endpoint in wireguard device
 	// use the public key so that we can find the endpoint later in bind
@@ -337,6 +344,13 @@ func (ir *InterceptReader) readPeerLine(key, value string, p []byte) (int, error
 		return ir.bufferBytesAndRead(p)
 	case "endpoint":
 		ir.log.Verbosef("%v - UAPI: IGNORE Updating endpoint", ir.peerConfig.publicKey)
+		ep, err := ir.device.net.bind.ParseInnerEndpoint(value)
+		if err != nil {
+			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to parse endpoint: %w", err)
+			return 0, ir.ipcErr
+		}
+		ir.peerConfig.endpoint = ep
+		// do not propagate endpoint to wireguard device yet
 		return 0, nil
 	default:
 		return ir.bufferBytesAndRead(p)
@@ -353,9 +367,9 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			return 0, ir.ipcErr
 		}
 		ir.device.log.Verbosef("UAPI: Removing all stun_server")
-		ir.device.stunServers.Lock()
-		defer ir.device.stunServers.Unlock()
-		ir.device.stunServers.endpoints = nil
+		ir.device.stun.Lock()
+		defer ir.device.stun.Unlock()
+		ir.device.stun.clients = nil
 		return 0, nil
 
 	case "replace_derp_servers":
@@ -364,34 +378,64 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			return 0, ir.ipcErr
 		}
 		ir.device.log.Verbosef("UAPI: Removing all derp_server")
-		ir.device.derpServers.Lock()
-		defer ir.device.derpServers.Unlock()
-		ir.device.derpServers.endpoints = nil
+		ir.device.derp.Lock()
+		defer ir.device.derp.Unlock()
+		ir.device.derp.clients = nil
 		return 0, nil
 
 	case "stun_server":
-		ir.device.log.Verbose("UAPI: Adding stun_server")
+		ir.log.Verbosef("UAPI: Adding stun_server")
 
-		endpoint, err := ir.device.net.bind.ParseEndpoint(value)
+		raddr, err := net.ResolveUDPAddr("udp", value)
 		if err != nil {
-			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set stun_server %v: %w", value, err)
+			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to resolve stun_server address %v: %w", value, err)
 			return 0, ir.ipcErr
 		}
-		ir.device.stunServers.Lock()
-		defer ir.device.stunServers.Unlock()
-		ir.device.stunServers.endpoints = append(ir.device.stunServers.endpoints, endpoint)
+
+		conn, err := net.DialUDP("udp", nil, raddr)
+		if err != nil {
+			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to dial stun_server %v: %w", value, err)
+			return 0, ir.ipcErr
+		}
+		ir.device.stun.Lock()
+		defer ir.device.stun.Unlock()
+		stun := &Stun{
+			conn: conn,
+			addr: value,
+		}
+		ir.device.stun.clients = append(ir.device.stun.clients, stun)
 		return 0, nil
 	case "derp_server":
-		ir.device.log.Verbose("UAPI: Adding derp_server")
+		ir.device.log.Verbosef("UAPI: Adding derp_server")
 
-		endpoint, err := ir.device.net.bind.ParseEndpoint(value)
+		_, err := url.Parse(value)
 		if err != nil {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set derp_server %v: %w", value, err)
 			return 0, ir.ipcErr
 		}
-		ir.device.derpServers.Lock()
-		defer ir.device.derpServers.Unlock()
-		ir.device.derpServers.endpoints = append(ir.device.derpServers.endpoints, endpoint)
+		ir.device.staticIdentity.RLock()
+		privateKey := ir.device.staticIdentity.privateKey
+		ir.device.staticIdentity.RUnlock()
+
+		derpKey, err := tskey.ParseNodePrivateUntyped(mem.B(privateKey[:]))
+		if err != nil {
+			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to parse private key for derp client: %w", err)
+			return 0, ir.ipcErr
+		}
+
+		client, err := derphttp.NewClient(derpKey, "http://"+value, ir.device.log.Verbosef, nil)
+		if err != nil {
+			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to create derp client for %v: %w", value, err)
+			return 0, ir.ipcErr
+		}
+
+		ir.device.derp.Lock()
+		defer ir.device.derp.Unlock()
+		derp := &Derp{
+			val:  client,
+			addr: value,
+		}
+		ir.device.derp.clients = append(ir.device.derp.clients, derp)
 		return 0, nil
 	case "private_key":
 		var sk wgdevice.NoisePrivateKey

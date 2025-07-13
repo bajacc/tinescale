@@ -19,6 +19,13 @@ type Endpoint struct {
 	origPubKey wgdevice.NoisePublicKey
 }
 
+func NewBind(inner conn.Bind, device *Device) *Bind {
+	return &Bind{
+		inner:  inner,
+		device: device,
+	}
+}
+
 // ClearSrc implements conn.Endpoint.
 func (e *Endpoint) ClearSrc() {}
 
@@ -58,6 +65,10 @@ func (b *Bind) ParseEndpoint(s string) (conn.Endpoint, error) {
 	}, nil
 }
 
+func (b *Bind) ParseInnerEndpoint(s string) (conn.Endpoint, error) {
+	return b.inner.ParseEndpoint(s)
+}
+
 func (b *Bind) BatchSize() int {
 	return b.inner.BatchSize()
 }
@@ -87,25 +98,53 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 	if !ok {
 		return fmt.Errorf("Error Enpoint is not a tinescale endpoint")
 	}
-	b.device.peers.Lock()
-	defer b.device.peers.Unlock()
+	b.device.peers.RLock()
+	defer b.device.peers.RUnlock()
 	peer, ok := b.device.peers.keyMap[ep.origPubKey]
 	if !ok {
 		return fmt.Errorf("peer with public key %s not found", ep.origPubKey)
 	}
 
-	peer.endpoint.Lock()
-	defer peer.endpoint.Unlock()
+	peer.endpoint.RLock()
+	defer peer.endpoint.RUnlock()
 
-	return nil
+	var err error
+
+	// send via uapi configured endpoints
+	err = b.inner.Send(bufs, peer.endpoint.uapi)
+	if err == nil {
+		return nil
+	}
+
+	// else send via stun configured endpoints
+	for _, stunEndpoint := range peer.endpoint.stun {
+		err = b.inner.Send(bufs, stunEndpoint)
+		if err == nil {
+			return nil
+		}
+	}
+
+	// else send via DERP
+	b.device.derp.RLock()
+	defer b.device.derp.RUnlock()
+	for _, derpClient := range b.device.derp.clients {
+		err = derpClient.Send(bufs, ep.origPubKey)
+		if err == nil {
+			return nil
+		}
+	}
+
+	return err
 }
 
-func (d *Device) sendViaDERP(bufs [][]byte, publicKey wgdevice.NoisePublicKey) error {
+func (d *Derp) Send(bufs [][]byte, publicKey wgdevice.NoisePublicKey) error {
 	// Convert wgdevice.NoisePublicKey to the key type expected by DERP client
+	d.RLock()
+	defer d.RUnlock()
 	derpKey := key.NodePublicFromRaw32(mem.B(publicKey[:]))
 
 	for _, buf := range bufs {
-		if err := d.derpClient.Send(derpKey, buf); err != nil {
+		if err := d.val.Send(derpKey, buf); err != nil {
 			return err
 		}
 	}
