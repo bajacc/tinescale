@@ -260,7 +260,7 @@ func (ir *InterceptReader) Read(p []byte) (int, error) {
 	}
 
 	if err := ir.scanner.Err(); err != nil {
-		ir.ipcErr = ipcErrorf(ipc.IpcErrorIO, "failed to read input: %w", err)
+		ir.ipcErr = ipcErrorf(ipc.IpcErrorIO, "failed to read input: %v", err)
 	}
 	return 0, ir.ipcErr
 }

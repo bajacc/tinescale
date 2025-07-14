@@ -3,6 +3,7 @@ package derppool
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 
 	"go4.org/mem"
@@ -118,6 +119,10 @@ func (d *derpPool) AddDerpClient(privateKey wgdevice.NoisePrivateKey, addr strin
 				d.log.Errorf("Error while receiving from %s: %v", addr, err)
 				continue
 			}
+			if msg == nil {
+				d.log.Verbosef("message nil %s", derp.addr)
+				continue
+			}
 			d.packetCh <- msg
 		}
 	}()
@@ -189,15 +194,12 @@ func (d *derp) Recv() (ReceivedPacket, error) {
 }
 
 func newReceivedPacket(msg tsderp.ReceivedMessage) (ReceivedPacket, error) {
-	packet, ok := msg.(*tsderp.ReceivedPacket)
+	packet, ok := msg.(tsderp.ReceivedPacket)
 	if !ok {
 		return nil, nil // Skip invalid message types
 	}
-	if packet == nil {
-		return nil, errors.New("nil derp packet")
-	}
 	if len(packet.Data) == 0 {
-		return nil, errors.New("empty data in derp packet")
+		return nil, fmt.Errorf("empty data in derp packet")
 	}
 
 	p := &receivedPacket{data: packet.Data}

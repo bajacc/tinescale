@@ -1,6 +1,6 @@
 set=1
 private_key=909d7dc175dff8461ac1e6bee76a2dd44982de2b1d3f0121450840eea22c6a58
-derp_server=http://10.10.0.10:3340
+derp_server=http://10.10.0.10:8080/derp
 listen_port=51820
 replace_peers=true
 public_key=01361f99041a1b5a39860182d292c9a8a4fdeeae7cef78867d2bcd63ef84c438

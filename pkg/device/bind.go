@@ -1,7 +1,9 @@
 package device
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"net/netip"
 
 	"golang.zx2c4.com/wireguard/conn"
@@ -12,6 +14,7 @@ type Bind struct {
 	inner  conn.Bind
 	device *Device
 	log    *wgdevice.Logger
+	cancel context.CancelFunc
 }
 
 type Endpoint struct {
@@ -107,6 +110,9 @@ func (b *Bind) BatchSize() int {
 }
 
 func (b *Bind) Close() error {
+	if b.cancel != nil {
+		b.cancel()
+	}
 	return b.inner.Close()
 }
 
@@ -115,6 +121,8 @@ func (b *Bind) SetMark(mark uint32) error {
 }
 
 func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	b.cancel = cancel
 
 	innerFns, actualPort, err := b.inner.Open(port)
 	if err != nil {
@@ -122,27 +130,10 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	}
 
 	var fns []conn.ReceiveFunc
-	// fns is the receive functions (UAPI and STUN endpoints)
 	for _, innerFn := range innerFns {
-		innerFn := innerFn // capture range variable
+		recv := innerFn
 		fn := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
-
-			// deal with derp packet first
-			select {
-			case packet, ok := <-b.device.derpPool.ReceiveChannel():
-				if !ok {
-					return 0, fmt.Errorf("derp pool channel closed")
-				}
-				n := copy(bufs[0][:], packet.Data())
-				sizes[0] = n
-				eps[0] = &Endpoint{
-					origPubKey: packet.Source(),
-				}
-				return 1, nil
-			default:
-			}
-
-			n, err := innerFn(bufs, sizes, eps)
+			n, err := recv(bufs, sizes, eps)
 			if err != nil {
 				return n, err
 			}
@@ -158,6 +149,24 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 		}
 		fns = append(fns, fn)
 	}
+
+	derpFn := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+		select {
+		case <-ctx.Done():
+			return 0, net.ErrClosed
+		case packet, ok := <-b.device.derpPool.ReceiveChannel():
+			if !ok {
+				return 0, fmt.Errorf("derp pool channel closed")
+			}
+			n := copy(bufs[0][:], packet.Data())
+			sizes[0] = n
+			eps[0] = &Endpoint{
+				origPubKey: packet.Source(),
+			}
+			return 1, nil
+		}
+	}
+	fns = append(fns, derpFn)
 
 	return fns, actualPort, err
 }
