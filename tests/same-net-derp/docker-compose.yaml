@@ -4,8 +4,8 @@ services:
     image: fredliang/derper
     environment:
       - DERP_DOMAIN=10.10.0.10
-      - DERP_ADDR=:3340
-      - DERP_HTTP_PORT=80
+      - DERP_ADDR=:3340 # fix
+      - DERP_HTTP_PORT=3340
       - DERP_STUN=false
       - DERP_CERT_MODE=manual
       - STUN=false

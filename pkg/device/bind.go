@@ -126,6 +126,22 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	for _, innerFn := range innerFns {
 		innerFn := innerFn // capture range variable
 		fn := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+
+			// deal with derp packet first
+			select {
+			case packet, ok := <-b.device.derpPool.ReceiveChannel():
+				if !ok {
+					return 0, fmt.Errorf("derp pool channel closed")
+				}
+				n := copy(bufs[0][:], packet.Data())
+				sizes[0] = n
+				eps[0] = &Endpoint{
+					origPubKey: packet.Source(),
+				}
+				return 1, nil
+			default:
+			}
+
 			n, err := innerFn(bufs, sizes, eps)
 			if err != nil {
 				return n, err
@@ -142,31 +158,6 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 		}
 		fns = append(fns, fn)
 	}
-
-	// TODO: this is ugly, make it better
-	derpReceiveFunc := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
-		b.device.derp.RLock()
-		defer b.device.derp.RUnlock()
-
-		senderKeys := make([]wgdevice.NoisePublicKey, len(bufs))
-
-		for _, client := range b.device.derp.clients {
-			n, err := client.Recv(bufs, sizes, senderKeys, b.device)
-			if err != nil {
-				continue // Try next DERP client on error
-			}
-			if n == 0 {
-				continue
-			}
-			// Create tinescale endpoints from sender public keys
-			for i := range n {
-				eps[i] = &Endpoint{origPubKey: senderKeys[i]}
-			}
-			return n, nil
-		}
-		return 0, nil
-	}
-	fns = append(fns, derpReceiveFunc)
 
 	return fns, actualPort, err
 }
@@ -205,14 +196,7 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 	}
 
 	// else send via DERP
-	b.device.derp.RLock()
-	defer b.device.derp.RUnlock()
-	for _, client := range b.device.derp.clients {
-		err = client.Send(bufs, ep.origPubKey, b.device)
-		if err == nil {
-			return nil
-		}
-	}
+	b.device.derpPool.Send(bufs, ep.origPubKey)
 
 	return err
 }

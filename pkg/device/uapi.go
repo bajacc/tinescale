@@ -83,15 +83,12 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 		device.stun.RLock()
 		defer device.stun.RUnlock()
 
-		device.derp.RLock()
-		defer device.derp.RUnlock()
-
 		// serialize device related values
 		for _, client := range device.stun.clients {
 			sendf("stun_server=%s", client.addr)
 		}
-		for _, client := range device.derp.clients {
-			sendf("derp_server=%s", client.addr)
+		for _, addr := range device.derpPool.GetAddresses() {
+			sendf("derp_server=%s", addr)
 		}
 	}()
 
@@ -230,6 +227,7 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 	endpointLine := fmt.Sprintf("endpoint=%s\n", config.publicKeyString)
 	ir.log.Verbosef("UAPI(tinescale): send endpoint line %s", endpointLine)
 	ir.bufferedBytes = append(ir.bufferedBytes, endpointLine...)
+	ir.peerConfig = nil
 }
 
 func (ir *InterceptReader) Read(p []byte) (int, error) {
@@ -374,9 +372,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			return 0, ir.ipcErr
 		}
 		ir.device.log.Verbosef("UAPI(tinescale): Removing all derp_server")
-		ir.device.derp.Lock()
-		defer ir.device.derp.Unlock()
-		ir.device.derp.clients = nil
+		ir.device.derpPool.Clear()
 		return 0, nil
 	case "stun_server":
 		raddr, err := net.ResolveUDPAddr("udp", value)
@@ -405,9 +401,14 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set derp_server %v: %w", value, err)
 			return 0, ir.ipcErr
 		}
-		ir.device.derp.Lock()
-		defer ir.device.derp.Unlock()
-		ir.device.derp.clients = append(ir.device.derp.clients, NewDerp(value))
+		ir.device.staticIdentity.RLock()
+		privateKey := ir.device.staticIdentity.privateKey
+		ir.device.staticIdentity.RUnlock()
+		if privateKey.IsZero() {
+			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set derp_server %v: private key not set yet", value)
+			return 0, ir.ipcErr
+		}
+		ir.device.derpPool.AddDerpClient(privateKey, value)
 		return 0, nil
 	case "private_key":
 		var sk wgdevice.NoisePrivateKey

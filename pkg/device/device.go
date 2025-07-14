@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/bajacc/tinescale/pkg/derppool"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
@@ -32,10 +33,7 @@ type Device struct {
 		sync.RWMutex
 		clients []*Stun
 	}
-	derp struct {
-		sync.RWMutex
-		clients []*Derp
-	}
+	derpPool derppool.DerpPool
 
 	// the following fields are mirrors from wg device
 
@@ -79,6 +77,7 @@ func (device *Device) Close() {
 	device.ipcMutex.Lock()
 	defer device.ipcMutex.Unlock()
 	device.inner.Close()
+	device.derpPool.Close()
 }
 
 type TunDevice struct {
@@ -95,6 +94,7 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *wgdevice.Logger) De
 	}
 	device := new(Device)
 	device.log = logger
+	device.derpPool = derppool.New(logger)
 	device.net.bind = NewBind(bind, device, logger)
 	device.inner = wgdevice.NewDevice(tun, device.net.bind, logger)
 	return device
