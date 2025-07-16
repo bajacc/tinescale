@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/bajacc/tinescale/pkg/derppool"
+	"github.com/bajacc/tinescale/pkg/stunPool"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
@@ -29,10 +30,7 @@ type Device struct {
 		sync.RWMutex
 		bind *Bind
 	}
-	stun struct {
-		sync.RWMutex
-		clients []*Stun
-	}
+	stunPool stunPool.StunPool
 	derpPool derppool.DerpPool
 
 	// the following fields are mirrors from wg device
@@ -61,12 +59,6 @@ type Peer struct {
 		uapi conn.Endpoint   // uapi configured endpoint
 		stun []conn.Endpoint // stun configured endpoints
 	}
-}
-
-type Stun struct {
-	sync.RWMutex
-	conn net.Conn
-	addr string
 }
 
 func (device *Device) Wait() chan struct{} {

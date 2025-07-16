@@ -79,13 +79,12 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 	}
 
 	func() {
-		// lock required resources
-		device.stun.RLock()
-		defer device.stun.RUnlock()
-
-		// serialize device related values
-		for _, client := range device.stun.clients {
-			sendf("stun_server=%s", client.addr)
+		for addr, state := range device.stunPool.GetAllResults() {
+			if state.Err != nil {
+				sendf("stun_server=%s err=%v", addr, state.Err)
+			} else {
+				sendf("stun_server=%s state=%s:%d timestamp=", addr, state.PublicIP, state.PublicPort, state.Timestamp)
+			}
 		}
 		for _, addr := range device.derpPool.GetAddresses() {
 			sendf("derp_server=%s", addr)
@@ -362,9 +361,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			return 0, ir.ipcErr
 		}
 		ir.device.log.Verbosef("UAPI(tinescale): Removing all stun_server")
-		ir.device.stun.Lock()
-		defer ir.device.stun.Unlock()
-		ir.device.stun.clients = nil
+		ir.device.stunPool.Clear()
 		return 0, nil
 	case "replace_derp_servers":
 		if value != "true" {
@@ -375,25 +372,13 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 		ir.device.derpPool.Clear()
 		return 0, nil
 	case "stun_server":
-		raddr, err := net.ResolveUDPAddr("udp", value)
+		_, err := net.ResolveUDPAddr("udp", value)
 		if err != nil {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to resolve stun_server address %v: %w", value, err)
 			return 0, ir.ipcErr
 		}
-
-		conn, err := net.DialUDP("udp", nil, raddr)
-		if err != nil {
-			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to dial stun_server %v: %w", value, err)
-			return 0, ir.ipcErr
-		}
 		ir.log.Verbosef("UAPI(tinescale): Adding stun_server")
-		ir.device.stun.Lock()
-		defer ir.device.stun.Unlock()
-		stun := &Stun{
-			conn: conn,
-			addr: value,
-		}
-		ir.device.stun.clients = append(ir.device.stun.clients, stun)
+		ir.device.stunPool.AddServer(value)
 		return 0, nil
 	case "derp_server":
 		_, err := url.Parse(value)

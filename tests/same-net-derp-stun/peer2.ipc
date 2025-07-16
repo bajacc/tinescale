@@ -1,0 +1,10 @@
+set=1
+private_key=80aad15bee3126936dd5784d704cea7110b52826ad9c4b0c2cbfa86c49f97470
+derp_server=http://10.10.0.10:8080/derp
+stun_server=10.10.0.10:3478
+listen_port=51820
+replace_peers=true
+public_key=390affb161f08eb900700065b69c2edb7aea5c83d6d7f45b936c6abbc2333921
+replace_allowed_ips=true
+allowed_ip=10.0.0.1/32
+persistent_keepalive_interval=15
