@@ -72,18 +72,7 @@ func (device *Device) Close() {
 	device.derpPool.Close()
 }
 
-type TunDevice struct {
-	tun.Device
-}
-
-func (t *TunDevice) Read(bufs [][]byte, sizes []int, offset int) (n int, err error) {
-	return t.Device.Read(bufs, sizes, offset)
-}
-
-func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceInterface {
-	tun := &TunDevice{
-		tunDevice,
-	}
+func NewDevice(tun tun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceInterface {
 	device := new(Device)
 	device.log = logger
 	device.derpPool = derppool.New(logger)
