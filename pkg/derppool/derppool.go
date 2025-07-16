@@ -26,18 +26,18 @@ type DerpPool interface {
 }
 
 type derpPool struct {
-	log       *wgdevice.Logger
-	poolMutex sync.RWMutex
-	wg        sync.WaitGroup
-	pool      map[string]*derp
+	log  *wgdevice.Logger
+	mu   sync.RWMutex
+	wg   sync.WaitGroup
+	pool map[string]*derp
 
 	packetCh chan ReceivedPacket
 }
 
 // GetAddresses implements DerpPool.
 func (d *derpPool) GetAddresses() []string {
-	d.poolMutex.Lock()
-	defer d.poolMutex.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
 	var addresses []string
 	for addr := range d.pool {
@@ -72,10 +72,10 @@ func (p *receivedPacket) Data() []byte {
 
 func New(logger *wgdevice.Logger) DerpPool {
 	return &derpPool{
-		log:       logger,
-		poolMutex: sync.RWMutex{},
-		packetCh:  make(chan ReceivedPacket, 1024),
-		pool:      make(map[string]*derp),
+		log:      logger,
+		mu:       sync.RWMutex{},
+		packetCh: make(chan ReceivedPacket, 1024),
+		pool:     make(map[string]*derp),
 	}
 }
 
@@ -86,8 +86,8 @@ func (d *derpPool) AddDerpClient(privateKey wgdevice.NoisePrivateKey, addr strin
 		return err
 	}
 
-	d.poolMutex.Lock()
-	defer d.poolMutex.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
 	_, exists := d.pool[addr]
 	if exists {
@@ -135,8 +135,8 @@ func (d *derpPool) Close() {
 }
 
 func (d *derpPool) Clear() {
-	d.poolMutex.Lock()
-	defer d.poolMutex.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
 	for _, derp := range d.pool {
 		derp.Lock()
@@ -151,8 +151,8 @@ func (d *derpPool) Clear() {
 }
 
 func (d *derpPool) Send(bufs [][]byte, publicKey wgdevice.NoisePublicKey) error {
-	d.poolMutex.RLock()
-	defer d.poolMutex.RUnlock()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 
 	var errs error
 	for _, derp := range d.pool {

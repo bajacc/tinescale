@@ -26,6 +26,7 @@ func NewBind(inner conn.Bind, device *Device, logger *wgdevice.Logger) *Bind {
 		inner:  inner,
 		device: device,
 		log:    logger,
+		cancel: func() {},
 	}
 }
 
@@ -110,9 +111,7 @@ func (b *Bind) BatchSize() int {
 }
 
 func (b *Bind) Close() error {
-	if b.cancel != nil {
-		b.cancel()
-	}
+	b.cancel()
 	return b.inner.Close()
 }
 
