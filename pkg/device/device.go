@@ -73,10 +73,11 @@ func (device *Device) Close() {
 }
 
 func NewDevice(tun tun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceInterface {
+	t := NewTunDevice(tun)
 	device := new(Device)
 	device.log = logger
 	device.derpPool = derppool.New(logger)
 	device.net.bind = NewBind(bind, device, logger)
-	device.inner = wgdevice.NewDevice(tun, device.net.bind, logger)
+	device.inner = wgdevice.NewDevice(t, device.net.bind, logger)
 	return device
 }
