@@ -1,16 +1,118 @@
 package device
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"os"
+	"sync"
+	"time"
 
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 )
 
+type WireGuardDialer struct {
+	localKey wgdevice.NoisePublicKey
+	localNet net.IPNet
+	localIp  net.IP
+	conns    map[wgdevice.NoisePublicKey]net.Conn
+}
+
+func NewWireGuardDialer(localKey wgdevice.NoisePublicKey, localNet net.IPNet) (*WireGuardDialer, error) {
+	localIp, err := PublicKeyToIP(localNet, localKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &WireGuardDialer{
+		localKey: localKey,
+		localNet: localNet,
+		localIp:  localIp,
+		conns:    make(map[wgdevice.NoisePublicKey]net.Conn),
+	}, nil
+}
+
+func (wd *WireGuardDialer) Dial(ctx context.Context, address string) (net.Conn, error) {
+	peerKeyBytes, err := hex.DecodeString(address)
+	if err != nil {
+		return nil, err
+	}
+
+	peerKey := wgdevice.NoisePublicKey(peerKeyBytes)
+
+	conn, exists := wd.conns[peerKey]
+	if exists {
+		return conn, nil
+	}
+
+	peerIp, err := PublicKeyToIP(wd.localNet, peerKey)
+	if err != nil {
+		return nil, err
+	}
+
+	conn = &WireGuardConn{
+		localIp:   wd.localIp,
+		peerIp:    peerIp,
+		readChan:  make(chan []byte, 100),
+		writeChan: make(chan []byte, 100),
+	}
+
+	return conn, nil
+}
+
+type WireGuardConn struct {
+	tunDevice interface{}
+	localIp   net.IP
+	peerIp    net.IP
+	readChan  chan []byte
+	writeChan chan []byte
+}
+
+// Close implements net.Conn.
+func (w *WireGuardConn) Close() error {
+	panic("unimplemented")
+}
+
+// LocalAddr implements net.Conn.
+func (w *WireGuardConn) LocalAddr() net.Addr {
+	panic("unimplemented")
+}
+
+// Read implements net.Conn.
+func (w *WireGuardConn) Read(b []byte) (n int, err error) {
+	panic("unimplemented")
+}
+
+// RemoteAddr implements net.Conn.
+func (w *WireGuardConn) RemoteAddr() net.Addr {
+	panic("unimplemented")
+}
+
+// SetDeadline implements net.Conn.
+func (w *WireGuardConn) SetDeadline(t time.Time) error {
+	panic("unimplemented")
+}
+
+// SetReadDeadline implements net.Conn.
+func (w *WireGuardConn) SetReadDeadline(t time.Time) error {
+	panic("unimplemented")
+}
+
+// SetWriteDeadline implements net.Conn.
+func (w *WireGuardConn) SetWriteDeadline(t time.Time) error {
+	panic("unimplemented")
+}
+
+// Write implements net.Conn.
+func (w *WireGuardConn) Write(b []byte) (n int, err error) {
+	panic("unimplemented")
+}
+
 type interceptTun struct {
 	inner tun.Device
+	conns sync.Map // map[string]*tunConn
 }
 
 // BatchSize implements tun.Device.

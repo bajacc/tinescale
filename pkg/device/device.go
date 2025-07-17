@@ -79,5 +79,6 @@ func NewDevice(tun tun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceIn
 	device.derpPool = derppool.New(logger)
 	device.net.bind = NewBind(bind, device, logger)
 	device.inner = wgdevice.NewDevice(t, device.net.bind, logger)
+
 	return device
 }
