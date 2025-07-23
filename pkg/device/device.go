@@ -4,8 +4,10 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/bajacc/tinescale/pkg/derppool"
+	"github.com/bajacc/tinescale/pkg/endpointpool"
 	"github.com/bajacc/tinescale/pkg/stunPool"
 	"github.com/bajacc/tinescale/pkg/tun"
 	"golang.zx2c4.com/wireguard/conn"
@@ -33,8 +35,9 @@ type Device struct {
 		sync.RWMutex
 		bind *Bind
 	}
-	stunPool stunPool.StunPool
-	derpPool derppool.DerpPool
+	stunPool     stunPool.StunPool
+	derpPool     derppool.DerpPool
+	endpointpool endpointpool.EndpointPool
 
 	// the following fields are mirrors from wg device
 
@@ -80,6 +83,7 @@ func NewDevice(t wgtun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceIn
 	device.tun = tun.New(logger, t)
 	device.derpPool = derppool.New(logger)
 	device.net.bind = NewBind(bind, &device, logger)
+	device.endpointpool = endpointpool.New(logger, device.tun, device.net.bind, 5*time.Second)
 	device.inner = wgdevice.NewDevice(device.tun, device.net.bind, logger)
 
 	return &device

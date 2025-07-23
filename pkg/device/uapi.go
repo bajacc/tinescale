@@ -191,6 +191,8 @@ func NewInterceptReader(r io.Reader, device *Device) *InterceptReader {
 }
 
 func (ir *InterceptReader) SetPeerFromConfig() {
+	var allowedipLine string
+	var endpointLine string
 	config := ir.peerConfig
 
 	if config == nil {
@@ -213,7 +215,15 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 	if !config.updateOnly {
 		ir.log.Verbosef("UAPI(tinescale): creating peer with public key %s", config.publicKeyString)
 		ir.device.peers.keyMap[config.publicKey] = &Peer{}
-		ir.device.tun.AddPeer(config.publicKey)
+		peerIp, err := ir.device.tun.AddPeer(config.publicKey)
+		if err != nil {
+			return
+		}
+		allowedipLine = fmt.Sprintf("allowed_ip=%s\n", peerIp)
+		// configure the peer endpoint in wireguard device
+		// use the public key so that we can find the endpoint later in bind
+		endpointLine = fmt.Sprintf("endpoint=%s\n", config.publicKeyString)
+		ir.log.Verbosef("UAPI(tinescale): send endpoint line %s", endpointLine)
 	}
 	peer := ir.device.peers.keyMap[config.publicKey]
 
@@ -223,11 +233,9 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 		peer.endpoint.uapi = config.endpoint
 	}()
 
-	// configure the peer endpoint in wireguard device
-	// use the public key so that we can find the endpoint later in bind
-	endpointLine := fmt.Sprintf("endpoint=%s\n", config.publicKeyString)
-	ir.log.Verbosef("UAPI(tinescale): send endpoint line %s", endpointLine)
 	ir.bufferedBytes = append(ir.bufferedBytes, endpointLine...)
+	ir.bufferedBytes = append(ir.bufferedBytes, allowedipLine...)
+
 	ir.peerConfig = nil
 }
 

@@ -148,19 +148,19 @@ func (t *InterceptTun) Name() (string, error) {
 	return t.inner.Name()
 }
 
-func (t *InterceptTun) AddPeer(key wgdevice.NoisePublicKey) error {
+func (t *InterceptTun) AddPeer(key wgdevice.NoisePublicKey) (*netip.Addr, error) {
 	ip, ok := helper.PublicKeyToIP(t.localNet, key)
 	if !ok {
-		return fmt.Errorf("could not create ip from public key")
+		return nil, fmt.Errorf("could not create ip from public key")
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	_, exists := t.ipToKey[ip]
 	if exists {
-		return fmt.Errorf("peer already exists")
+		return nil, fmt.Errorf("peer already exists")
 	}
 	t.ipToKey[ip] = key
-	return nil
+	return &ip, nil
 }
 
 func (t *InterceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool) {
@@ -229,7 +229,7 @@ func (t *InterceptTun) toPubKeyPacket(pkPkt *PubKeyPacket, ipPkt []byte) bool {
 	return true
 }
 
-func (t *InterceptTun) GetInboundPacket() <-chan *PubKeyPacket {
+func (t *InterceptTun) GetInboundPacketCh() <-chan *PubKeyPacket {
 	return t.inboundCh
 }
 

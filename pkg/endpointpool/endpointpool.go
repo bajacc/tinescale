@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bajacc/tinescale/pkg/stunPool"
 	"github.com/bajacc/tinescale/pkg/tun"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
@@ -25,9 +26,11 @@ type EndpointPool interface {
 }
 
 type endpointPool struct {
-	log  *wgdevice.Logger
-	mu   sync.RWMutex
-	pool map[wgdevice.NoisePublicKey]*peerEndpoints
+	log        *wgdevice.Logger
+	mu         sync.RWMutex
+	pool       map[wgdevice.NoisePublicKey]*peerEndpoints
+	stunPool   stunPool.StunPool
+	listenPort uint16
 
 	tun            *tun.InterceptTun
 	bind           conn.Bind
@@ -57,7 +60,7 @@ func New(logger *wgdevice.Logger, tun *tun.InterceptTun, bind conn.Bind, updateI
 	}
 
 	go e.updateEndpointLoop(ctx)
-	go e.handleIncomingResponses(ctx)
+	go e.handleIncomingPackets(ctx)
 
 	return e
 }
@@ -148,9 +151,9 @@ func (e *endpointPool) requestEndpoints(peerKey wgdevice.NoisePublicKey) error {
 	return nil
 }
 
-// handleIncomingResponses processes incoming endpoint responses from peers
-func (e *endpointPool) handleIncomingResponses(ctx context.Context) {
-	inboundCh := e.tun.GetInboundPacket()
+// handleIncomingPackets processes incoming endpoint requests and responses from peers
+func (e *endpointPool) handleIncomingPackets(ctx context.Context) {
+	inboundCh := e.tun.GetInboundPacketCh()
 
 	for {
 		select {
@@ -161,13 +164,19 @@ func (e *endpointPool) handleIncomingResponses(ctx context.Context) {
 				return
 			}
 
-			var response EndpointResponse
-			if err := proto.Unmarshal(packet.Data(), &response); err != nil {
-				e.log.Verbosef("Failed to unmarshal response from peer %x: %v", packet.Dst(), err)
+			var request EndpointRequest
+			if err := proto.Unmarshal(packet.Data(), &request); err == nil {
+				e.handleEndpointRequest(packet.Src(), &request)
 				continue
 			}
 
-			e.processEndpointResponse(packet.Dst(), &response)
+			var response EndpointResponse
+			if err := proto.Unmarshal(packet.Data(), &response); err == nil {
+				e.processEndpointResponse(packet.Src(), &response)
+				continue
+			}
+
+			e.log.Verbosef("Failed to unmarshal packet from peer %x as request or response", packet.Src())
 		}
 	}
 }
@@ -198,5 +207,88 @@ func (e *endpointPool) processEndpointResponse(peerKey wgdevice.NoisePublicKey, 
 	peer.eps = newEndpoints
 	peer.mu.Unlock()
 
-	e.log.Verbosef("Updated %d endpoints for peer %x", len(newEndpoints), peerKey)
+	e.log.Verbosef("Updated %d endpoints for peer %x", len(newEndpoints), peerKey[:8])
+}
+
+// handleEndpointRequest processes incoming endpoint requests and sends a response
+func (e *endpointPool) handleEndpointRequest(peerKey wgdevice.NoisePublicKey, request *EndpointRequest) {
+	e.log.Verbosef("Received endpoint request from peer %x", peerKey[:8])
+
+	localEndpoints := e.getLocalEndpoints()
+	response := &EndpointResponse{
+		RequestId: request.RequestId,
+		Addresses: localEndpoints,
+	}
+	data, err := proto.Marshal(response)
+	if err != nil {
+		e.log.Errorf("Failed to marshal endpoint response: %v", err)
+		return
+	}
+
+	e.tun.SendPubKeyPacket(peerKey, data)
+	e.log.Verbosef("Sent endpoint response with %d addresses to peer %x", len(response.Addresses), peerKey[:8])
+}
+
+func (e *endpointPool) getLocalEndpoints() []*Address {
+	var result []*Address
+	result = append(result, e.getPrivateEndpoints()...)
+	result = append(result, e.getStunEndpoints()...)
+	return result
+}
+
+// getLocalEndpoints returns the local endpoints that can be shared with peers
+func (e *endpointPool) getStunEndpoints() []*Address {
+	var result []*Address
+
+	// 1. Get STUN-discovered public endpoints
+	stunResults := e.stunPool.GetAllResults()
+	for _, stunResult := range stunResults {
+		if stunResult.Err != nil {
+			continue
+		}
+		result = append(result, &Address{
+			Ip:   stunResult.PublicIP,
+			Port: uint32(stunResult.PublicPort),
+		})
+	}
+	return result
+}
+
+func (e *endpointPool) getPrivateEndpoints() []*Address {
+
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return []*Address{}
+	}
+	var ifaceAddr []net.Addr
+	for _, iface := range interfaces {
+		// Skip loopback and down interfaces
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		ifaceAddr = append(ifaceAddr, addrs...)
+
+	}
+
+	var result []*Address
+	for _, addr := range ifaceAddr {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if !ipNet.IP.IsLoopback() && (ipNet.IP.IsGlobalUnicast() || ipNet.IP.IsPrivate()) {
+			result = append(result, &Address{
+				Ip:   ipNet.IP,
+				Port: uint32(e.listenPort),
+			})
+		}
+	}
+
+	e.log.Verbosef("Discovered %d local endpoints", len(result))
+	return result
 }
