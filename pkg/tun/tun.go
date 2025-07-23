@@ -26,7 +26,7 @@ type InterceptTun struct {
 	mu      sync.RWMutex
 	ipToKey map[netip.Addr]wgdevice.NoisePublicKey
 
-	readCh     chan *ReadResult
+	readCh     chan *readResult
 	outboundCh chan *PubKeyPacket
 	inboundCh  chan *PubKeyPacket
 
@@ -34,7 +34,7 @@ type InterceptTun struct {
 	cancel context.CancelFunc
 }
 
-type ReadResult struct {
+type readResult struct {
 	bufs  [][]byte
 	sizes []int
 	n     int
@@ -55,7 +55,7 @@ func New(logger *wgdevice.Logger, tun tun.Device) *InterceptTun {
 		log:        logger,
 		localNet:   netip.MustParsePrefix("fd00::/8"),
 		ipToKey:    make(map[netip.Addr]wgdevice.NoisePublicKey),
-		readCh:     make(chan *ReadResult),
+		readCh:     make(chan *readResult),
 		outboundCh: make(chan *PubKeyPacket, 1024),
 		inboundCh:  make(chan *PubKeyPacket, 1024),
 		ctx:        ctx,
@@ -235,18 +235,18 @@ func (t *InterceptTun) Read(bufs [][]byte, sizes []int, offset int) (int, error)
 		select {
 		case <-t.ctx.Done():
 			return 0, net.ErrClosed
-		case readResult, ok := <-t.readCh:
+		case result, ok := <-t.readCh:
 			if !ok {
 				return 0, net.ErrClosed
 			}
-			if readResult.err != nil {
-				return readResult.n, readResult.err
+			if result.err != nil {
+				return result.n, result.err
 			}
-			copy(sizes, readResult.sizes)
-			for i := range readResult.bufs {
-				copy(bufs[i][offset:], readResult.bufs[i][:sizes[i]])
+			copy(sizes, result.sizes)
+			for i := range result.bufs {
+				copy(bufs[i][offset:], result.bufs[i][:sizes[i]])
 			}
-			return len(readResult.bufs), nil
+			return len(result.bufs), nil
 		case packet, ok := <-t.outboundCh:
 			if !ok {
 				return 0, net.ErrClosed
@@ -302,7 +302,7 @@ func (t *InterceptTun) routineReadFromTUN() {
 		}
 
 		n, err := t.inner.Read(bufs, sizes, 0)
-		t.readCh <- &ReadResult{
+		t.readCh <- &readResult{
 			bufs:  bufs,
 			sizes: sizes,
 			n:     n,

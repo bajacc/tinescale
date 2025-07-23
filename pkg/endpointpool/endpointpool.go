@@ -1,3 +1,4 @@
+//go:generate protoc --go_out=paths=source_relative:. endpointpool.proto
 package endpointpool
 
 import (
@@ -119,7 +120,7 @@ func (e *endpointPool) updatePeerLoop(ctx context.Context, p *peerEndpoints, key
 	for {
 		select {
 		case <-ctx.Done():
-			e.log.Verbosef("Stopping endpoint updates for peer %x", key[:8])
+			e.log.Verbosef("Stopping endpoint updates for peer %x", key)
 			return
 		case <-ticker.C:
 			// response, err := e.client.RequestEndpoints(ctx, key, e.requestTimeout)
