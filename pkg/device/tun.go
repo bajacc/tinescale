@@ -3,134 +3,17 @@ package device
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 )
-
-type WireGuardAddr struct {
-	Key wgdevice.NoisePublicKey
-}
-
-func (w WireGuardAddr) Network() string {
-	return "wireguard"
-}
-
-func (w WireGuardAddr) String() string {
-	return hex.EncodeToString(w.Key[:])
-}
-
-type WireGuardConn struct {
-	localIp  netip.Addr
-	remoteIp netip.Addr
-
-	localAddr  *WireGuardAddr
-	remoteAddr *WireGuardAddr
-
-	inboundCh  chan []byte
-	outboundCh chan []byte
-	done       chan struct{}
-
-	readDeadline  atomic.Value
-	writeDeadline atomic.Value
-}
-
-// Close implements net.Conn.
-func (w *WireGuardConn) Close() error {
-	close(w.done)
-	close(w.inboundCh)
-	return nil
-}
-
-// LocalAddr implements net.Conn.
-func (w *WireGuardConn) LocalAddr() net.Addr {
-	return w.localAddr
-}
-
-// RemoteAddr implements net.Conn.
-func (w *WireGuardConn) RemoteAddr() net.Addr {
-	return w.remoteAddr
-}
-
-// SetDeadline implements net.Conn.
-func (w *WireGuardConn) SetDeadline(t time.Time) error {
-	w.readDeadline.Store(t)
-	w.writeDeadline.Store(t)
-	return nil
-}
-
-// SetReadDeadline implements net.Conn.
-func (w *WireGuardConn) SetReadDeadline(t time.Time) error {
-	w.readDeadline.Store(t)
-	return nil
-}
-
-func (w *WireGuardConn) getReadDeadline() time.Time {
-	if v := w.readDeadline.Load(); v != nil {
-		return v.(time.Time)
-	}
-	return time.Time{}
-}
-
-// SetWriteDeadline implements net.Conn.
-func (w *WireGuardConn) SetWriteDeadline(t time.Time) error {
-	w.writeDeadline.Store(t)
-	return nil
-}
-
-func (w *WireGuardConn) getWriteDeadline() time.Time {
-	if v := w.writeDeadline.Load(); v != nil {
-		return v.(time.Time)
-	}
-	return time.Time{}
-}
-
-// Write implements net.Conn.
-func (w *WireGuardConn) Write(b []byte) (n int, err error) {
-	var timeoutCh <-chan time.Time
-
-	if deadline := w.getWriteDeadline(); !deadline.IsZero() {
-		timeoutCh = time.After(time.Until(deadline))
-	}
-
-	select {
-	case w.outboundCh <- b:
-		return len(b), nil
-	case <-w.done:
-		return 0, net.ErrClosed
-	case <-timeoutCh:
-		return 0, os.ErrDeadlineExceeded
-	}
-}
-
-// Read implements net.Conn.
-func (w *WireGuardConn) Read(b []byte) (n int, err error) {
-	var timeoutCh <-chan time.Time
-
-	if deadline := w.getReadDeadline(); !deadline.IsZero() {
-		timeoutCh = time.After(time.Until(deadline))
-	}
-
-	select {
-	case pkt := <-w.inboundCh:
-		return copy(b, pkt), nil
-	case <-w.done:
-		return 0, net.ErrClosed
-	case <-timeoutCh:
-		return 0, os.ErrDeadlineExceeded
-	}
-}
 
 type interceptTun struct {
 	inner tun.Device
@@ -139,12 +22,72 @@ type interceptTun struct {
 	localKey wgdevice.NoisePublicKey
 	localNet netip.Prefix
 	localIp  netip.Addr
-	mu       sync.RWMutex
-	conns    map[netip.Addr]*WireGuardConn
 
-	outboundCh  chan []byte
-	readErrorCh chan error
-	done        chan struct{}
+	mu      sync.RWMutex
+	ipToKey map[netip.Addr]wgdevice.NoisePublicKey
+
+	readCh     chan *ReadResult
+	outboundCh chan *PubKeyPacket
+	inboundCh  chan *PubKeyPacket
+
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func NewTunDevice(logger *wgdevice.Logger, tun tun.Device) *interceptTun {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	t := &interceptTun{
+		inner:      tun,
+		log:        logger,
+		localNet:   netip.MustParsePrefix("fd00::/8"),
+		ipToKey:    make(map[netip.Addr]wgdevice.NoisePublicKey),
+		readCh:     make(chan *ReadResult),
+		outboundCh: make(chan *PubKeyPacket, 1024),
+		inboundCh:  make(chan *PubKeyPacket, 1024),
+		ctx:        ctx,
+		cancel:     cancel,
+	}
+
+	go t.routineReadFromTUN()
+
+	return t
+}
+
+func (t *interceptTun) SetLocalKey(localKey wgdevice.NoisePublicKey) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	localIp, ok := PublicKeyToIP(t.localNet, localKey)
+	if !ok {
+		return fmt.Errorf("cannot convert %s to ip", localKey)
+	}
+
+	t.localKey = localKey
+	t.localIp = localIp
+	return nil
+}
+
+func (t *interceptTun) SetLocaNet(localNet netip.Prefix) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	localIp, ok := PublicKeyToIP(localNet, t.localKey)
+	if !ok {
+		return fmt.Errorf("cannot convert %s to ip", t.localKey)
+	}
+
+	newIpToKey := make(map[netip.Addr]wgdevice.NoisePublicKey)
+	for _, key := range t.ipToKey {
+		ip, ok := PublicKeyToIP(localNet, key)
+		if !ok {
+			return fmt.Errorf("cannot convert %s to ip", key)
+		}
+		newIpToKey[ip] = key
+	}
+
+	t.ipToKey = newIpToKey
+	t.localNet = localNet
+	t.localIp = localIp
+	return nil
 }
 
 // BatchSize implements tun.Device.
@@ -154,12 +97,8 @@ func (t *interceptTun) BatchSize() int {
 
 // Close implements tun.Device.
 func (t *interceptTun) Close() error {
-	close(t.done)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for _, conn := range t.conns {
-		conn.Close()
-	}
+	t.cancel()
+	close(t.inboundCh)
 	close(t.outboundCh)
 	return t.inner.Close()
 }
@@ -184,69 +123,144 @@ func (t *interceptTun) Name() (string, error) {
 	return t.inner.Name()
 }
 
-func (t *interceptTun) Lookup(ipBytes []byte) *WireGuardConn {
-	ip, ok := netip.AddrFromSlice(ipBytes)
+func (t *interceptTun) addPeer(key wgdevice.NoisePublicKey) error {
+	ip, ok := PublicKeyToIP(t.localNet, key)
 	if !ok {
-		return nil
+		return fmt.Errorf("could not create ip from public key")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, exists := t.ipToKey[ip]
+	if exists {
+		return fmt.Errorf("peer already exists")
+	}
+	t.ipToKey[ip] = key
+	return nil
+}
+
+type ReadResult struct {
+	bufs  [][]byte
+	sizes []int
+	n     int
+	err   error
+}
+
+type PubKeyPacket struct {
+	src  wgdevice.NoisePublicKey
+	dst  wgdevice.NoisePublicKey
+	data []byte
+}
+
+func (t *interceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool) {
+	srcIP, ok1 := PublicKeyToIP(t.localNet, pkPkt.src)
+	dstIP, ok2 := PublicKeyToIP(t.localNet, pkPkt.dst)
+	if !ok1 || !ok2 {
+		return 0, false
+	}
+	src := srcIP.AsSlice()
+	dst := dstIP.AsSlice()
+	if srcIP.Is4() {
+		copy(ipPkt[wgdevice.IPv4offsetDst:wgdevice.IPv4offsetDst+net.IPv4len], dst)
+		copy(ipPkt[wgdevice.IPv4offsetSrc:wgdevice.IPv4offsetSrc+net.IPv4len], src)
+		copy(ipPkt[ipv4.HeaderLen:], pkPkt.data) // header length without extension headers
+		return len(pkPkt.data) + ipv4.HeaderLen, true
+	} else {
+		copy(ipPkt[wgdevice.IPv6offsetDst:wgdevice.IPv6offsetDst+net.IPv6len], dst)
+		copy(ipPkt[wgdevice.IPv6offsetSrc:wgdevice.IPv6offsetSrc+net.IPv6len], src)
+		copy(ipPkt[ipv6.HeaderLen:], pkPkt.data)
+		return len(pkPkt.data) + ipv6.HeaderLen, true
+	}
+}
+
+func (t *interceptTun) toPubKeyPacket(pkPkt *PubKeyPacket, ipPkt []byte) bool {
+	if len(ipPkt) == 0 {
+		return false
+	}
+
+	var dst []byte
+	var src []byte
+	var headerLen int
+
+	switch ipPkt[0] >> 4 {
+	case 4:
+		if len(ipPkt) < ipv4.HeaderLen {
+			return false
+		}
+
+		headerLen = ipv4.HeaderLen // header length without extension headers
+		dst = ipPkt[wgdevice.IPv4offsetDst : wgdevice.IPv4offsetDst+net.IPv4len]
+		src = ipPkt[wgdevice.IPv4offsetSrc : wgdevice.IPv4offsetSrc+net.IPv4len]
+	case 6:
+		if len(ipPkt) < ipv6.HeaderLen {
+			return false
+		}
+		headerLen = ipv6.HeaderLen
+		dst = ipPkt[wgdevice.IPv6offsetDst : wgdevice.IPv6offsetDst+net.IPv6len]
+		src = ipPkt[wgdevice.IPv6offsetSrc : wgdevice.IPv6offsetSrc+net.IPv6len]
+	default:
+		return false
+	}
+	ipSrc, ok1 := netip.AddrFromSlice(src)
+	ipDst, ok2 := netip.AddrFromSlice(dst)
+	if !ok1 || !ok2 {
+		return false
 	}
 	t.mu.RLock()
-	defer t.mu.RUnlock()
-	conn, ok := t.conns[ip]
-	if !ok {
-		return nil
+	defer t.mu.Unlock()
+	keySrc, ok1 := t.ipToKey[ipSrc]
+	keyDst, ok2 := t.ipToKey[ipDst]
+	if !ok1 || !ok2 {
+		return false
 	}
-	return conn
+	pkPkt.src = keySrc
+	pkPkt.dst = keyDst
+	pkPkt.data = append([]byte(nil), ipPkt[headerLen:]...) // deep copy
+	return true
 }
 
 // Read implements tun.Device.
-func (t *interceptTun) Read(bufs [][]byte, sizes []int, offset int) (n int, err error) {
-	select {
-	case <-t.done:
-		return 0, net.ErrClosed
-	case err := <-t.readErrorCh:
-		if err != nil {
-			return 0, err
+func (t *interceptTun) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	for {
+		select {
+		case <-t.ctx.Done():
+			return 0, net.ErrClosed
+		case readResult, ok := <-t.readCh:
+			if !ok {
+				return 0, net.ErrClosed
+			}
+			if readResult.err != nil {
+				return readResult.n, readResult.err
+			}
+			copy(sizes, readResult.sizes)
+			for i := range readResult.bufs {
+				copy(bufs[i][offset:], readResult.bufs[i][:sizes[i]])
+			}
+			return len(readResult.bufs), nil
+		case packet, ok := <-t.outboundCh:
+			if !ok {
+				return 0, net.ErrClosed
+			}
+
+			if n, ok := t.toIpPacket(bufs[0][offset:], packet); ok {
+				sizes[0] = n
+				return 1, nil
+			} else {
+				continue // drop silently
+			}
 		}
-	case pkt := <-t.outboundCh:
-		size := copy(bufs[0][:], pkt[:])
-		sizes[0] = size
-		// TODO offset
-		return 1, nil
 	}
-	return 0, nil
 }
 
 // Write implements tun.Device.
 func (t *interceptTun) Write(bufs [][]byte, offset int) (int, error) {
 	var newBufs [][]byte
-	connWrite := 0
+	write := 0
 	for i := 0; i < len(bufs); i++ {
 		packet := bufs[i][offset:]
-		if len(packet) == 0 {
-			continue
-		}
-
-		var conn *WireGuardConn
-		switch packet[0] >> 4 {
-		case 4:
-			if len(packet) < ipv4.HeaderLen {
-				continue
-			}
-			dst := packet[wgdevice.IPv4offsetDst : wgdevice.IPv4offsetDst+net.IPv4len]
-			conn = t.Lookup(dst)
-		case 6:
-			if len(packet) < ipv6.HeaderLen {
-				continue
-			}
-			dst := packet[wgdevice.IPv6offsetDst : wgdevice.IPv6offsetDst+net.IPv6len]
-			conn = t.Lookup(dst)
-		default:
-			t.log.Verbosef("try to write packet with unknown IP version")
-		}
-
-		if conn != nil {
-			conn.inboundCh <- packet
-			connWrite += 1
+		var pkPacket PubKeyPacket
+		if ok := t.toPubKeyPacket(&pkPacket, packet); ok {
+			t.inboundCh <- &pkPacket
+			write += 1
 		} else {
 			newBufs = append(newBufs, bufs[i])
 		}
@@ -255,91 +269,36 @@ func (t *interceptTun) Write(bufs [][]byte, offset int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return tunWrite + connWrite, nil
-}
-
-func (t *interceptTun) GetDialFunc() func(ctx context.Context, key string) (net.Conn, error) {
-	return func(ctx context.Context, key string) (net.Conn, error) {
-		remoteKeyBytes, err := hex.DecodeString(key)
-		if err != nil {
-			return nil, err
-		}
-
-		remoteKey := wgdevice.NoisePublicKey(remoteKeyBytes)
-
-		remoteIp, ok := PublicKeyToIP(t.localNet, remoteKey)
-		if !ok {
-			return nil, fmt.Errorf("cannot convert %s to ip", remoteKey)
-		}
-
-		conn, exists := t.conns[remoteIp]
-		if exists {
-			return conn, nil
-		}
-
-		conn = &WireGuardConn{
-			localIp:    t.localIp,
-			remoteIp:   remoteIp,
-			localAddr:  &WireGuardAddr{t.localKey},
-			remoteAddr: &WireGuardAddr{remoteKey},
-			inboundCh:  make(chan []byte, 1024),
-			outboundCh: t.outboundCh,
-		}
-
-		return conn, nil
-	}
+	return tunWrite + write, nil
 }
 
 func (t *interceptTun) routineReadFromTUN() {
-	var (
-		batchSize = t.inner.BatchSize()
-		bufs      = make([][]byte, batchSize)
-		sizes     = make([]int, batchSize)
-	)
-
-	for i := range bufs {
-		bufs[i] = make([]byte, wgdevice.MaxMessageSize)
-	}
-
 	for {
+		select {
+		case <-t.ctx.Done():
+			close(t.readCh)
+			return
+		default:
+		}
+
+		var (
+			batchSize = t.inner.BatchSize()
+			bufs      = make([][]byte, batchSize)
+			sizes     = make([]int, batchSize)
+		)
+
+		for i := range bufs {
+			bufs[i] = make([]byte, wgdevice.MaxMessageSize)
+		}
 
 		n, err := t.inner.Read(bufs, sizes, 0)
-		if err != nil {
-			t.readErrorCh <- err
-			if !errors.Is(err, os.ErrClosed) {
-				t.log.Errorf("Failed to read packet from TUN device: %v", err)
-				continue
-			}
-			return
-		}
-
-		for i := range n {
-			t.outboundCh <- bufs[i][0:sizes[i]]
+		t.readCh <- &ReadResult{
+			bufs:  bufs,
+			sizes: sizes,
+			n:     n,
+			err:   err,
 		}
 	}
-}
-
-func NewTunDevice(logger *wgdevice.Logger, tun tun.Device, localKey wgdevice.NoisePublicKey, localNet netip.Prefix) (tun.Device, error) {
-	localIp, ok := PublicKeyToIP(localNet, localKey)
-	if !ok {
-		return nil, fmt.Errorf("cannot convert %s to ip", localKey)
-	}
-
-	t := &interceptTun{
-		inner:       tun,
-		log:         logger,
-		localKey:    localKey,
-		localIp:     localIp,
-		localNet:    localNet,
-		conns:       map[netip.Addr]*WireGuardConn{},
-		outboundCh:  make(chan []byte, 1024),
-		readErrorCh: make(chan error),
-		done:        make(chan struct{}),
-	}
-
-	go t.routineReadFromTUN()
-
-	return t, nil
 }
 
 // PublicKeyToIP converts a public key to an IP address

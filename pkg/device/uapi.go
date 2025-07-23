@@ -212,6 +212,7 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 	if !config.updateOnly {
 		ir.log.Verbosef("UAPI(tinescale): creating peer with public key %s", config.publicKeyString)
 		ir.device.peers.keyMap[config.publicKey] = &Peer{}
+		ir.device.tun.addPeer(config.publicKey)
 	}
 	peer := ir.device.peers.keyMap[config.publicKey]
 
@@ -405,9 +406,9 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 		ir.log.Verbosef("UAPI(tinescale): Updating private key")
 		ir.device.staticIdentity.Lock()
 		defer ir.device.staticIdentity.Unlock()
-		ir.device.staticIdentity.privateKeyHex = value
 		ir.device.staticIdentity.privateKey = sk
 		ir.device.staticIdentity.publicKey = publicKey(&sk)
+		ir.device.tun.SetLocalKey(ir.device.staticIdentity.publicKey)
 		return ir.bufferBytesAndRead(p)
 	case "listen_port":
 		port, err := strconv.ParseUint(value, 10, 16)

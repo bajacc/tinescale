@@ -26,6 +26,8 @@ type Device struct {
 	log      *wgdevice.Logger
 	ipcMutex sync.RWMutex
 
+	tun *interceptTun
+
 	net struct {
 		sync.RWMutex
 		bind *Bind
@@ -37,9 +39,8 @@ type Device struct {
 
 	staticIdentity struct {
 		sync.RWMutex
-		privateKeyHex string
-		privateKey    wgdevice.NoisePrivateKey
-		publicKey     wgdevice.NoisePublicKey
+		privateKey wgdevice.NoisePrivateKey
+		publicKey  wgdevice.NoisePublicKey
 	}
 
 	peers struct {
@@ -73,12 +74,12 @@ func (device *Device) Close() {
 }
 
 func NewDevice(tun tun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceInterface {
-	t := NewTunDevice(tun)
-	device := new(Device)
+	var device Device
+	device.tun = NewTunDevice(logger, tun)
 	device.log = logger
 	device.derpPool = derppool.New(logger)
-	device.net.bind = NewBind(bind, device, logger)
-	device.inner = wgdevice.NewDevice(t, device.net.bind, logger)
+	device.net.bind = NewBind(bind, &device, logger)
+	device.inner = wgdevice.NewDevice(device.tun, device.net.bind, logger)
 
-	return device
+	return &device
 }
