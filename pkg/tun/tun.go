@@ -47,6 +47,18 @@ type PubKeyPacket struct {
 	data []byte
 }
 
+func (p *PubKeyPacket) Src() wgdevice.NoisePublicKey {
+	return p.src
+}
+
+func (p *PubKeyPacket) Dst() wgdevice.NoisePublicKey {
+	return p.dst
+}
+
+func (p *PubKeyPacket) Data() []byte {
+	return p.data
+}
+
 func New(logger *wgdevice.Logger, tun tun.Device) *InterceptTun {
 	ctx, cancel := context.WithCancel(context.Background())
 

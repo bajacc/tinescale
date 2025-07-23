@@ -73,27 +73,27 @@ func (x *Address) GetPort() uint32 {
 	return 0
 }
 
-type Request struct {
+type EndpointRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RequestId     uint32                 `protobuf:"varint,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Request) Reset() {
-	*x = Request{}
+func (x *EndpointRequest) Reset() {
+	*x = EndpointRequest{}
 	mi := &file_endpointpool_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Request) String() string {
+func (x *EndpointRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Request) ProtoMessage() {}
+func (*EndpointRequest) ProtoMessage() {}
 
-func (x *Request) ProtoReflect() protoreflect.Message {
+func (x *EndpointRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_endpointpool_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -105,19 +105,19 @@ func (x *Request) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Request.ProtoReflect.Descriptor instead.
-func (*Request) Descriptor() ([]byte, []int) {
+// Deprecated: Use EndpointRequest.ProtoReflect.Descriptor instead.
+func (*EndpointRequest) Descriptor() ([]byte, []int) {
 	return file_endpointpool_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *Request) GetRequestId() uint32 {
+func (x *EndpointRequest) GetRequestId() uint32 {
 	if x != nil {
 		return x.RequestId
 	}
 	return 0
 }
 
-type Response struct {
+type EndpointResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RequestId     uint32                 `protobuf:"varint,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	Addresses     []*Address             `protobuf:"bytes,2,rep,name=addresses,proto3" json:"addresses,omitempty"`
@@ -125,20 +125,20 @@ type Response struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Response) Reset() {
-	*x = Response{}
+func (x *EndpointResponse) Reset() {
+	*x = EndpointResponse{}
 	mi := &file_endpointpool_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Response) String() string {
+func (x *EndpointResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Response) ProtoMessage() {}
+func (*EndpointResponse) ProtoMessage() {}
 
-func (x *Response) ProtoReflect() protoreflect.Message {
+func (x *EndpointResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_endpointpool_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -150,19 +150,19 @@ func (x *Response) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Response.ProtoReflect.Descriptor instead.
-func (*Response) Descriptor() ([]byte, []int) {
+// Deprecated: Use EndpointResponse.ProtoReflect.Descriptor instead.
+func (*EndpointResponse) Descriptor() ([]byte, []int) {
 	return file_endpointpool_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *Response) GetRequestId() uint32 {
+func (x *EndpointResponse) GetRequestId() uint32 {
 	if x != nil {
 		return x.RequestId
 	}
 	return 0
 }
 
-func (x *Response) GetAddresses() []*Address {
+func (x *EndpointResponse) GetAddresses() []*Address {
 	if x != nil {
 		return x.Addresses
 	}
@@ -176,11 +176,11 @@ const file_endpointpool_proto_rawDesc = "" +
 	"\x12endpointpool.proto\x12\fendpointpool\"-\n" +
 	"\aAddress\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\fR\x02ip\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\"(\n" +
-	"\aRequest\x12\x1d\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\"0\n" +
+	"\x0fEndpointRequest\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x01 \x01(\rR\trequestId\"^\n" +
-	"\bResponse\x12\x1d\n" +
+	"request_id\x18\x01 \x01(\rR\trequestId\"f\n" +
+	"\x10EndpointResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\rR\trequestId\x123\n" +
 	"\taddresses\x18\x02 \x03(\v2\x15.endpointpool.AddressR\taddressesB.Z,github.com/bajacc/tinescale/pkg/endpointpoolb\x06proto3"
@@ -199,12 +199,12 @@ func file_endpointpool_proto_rawDescGZIP() []byte {
 
 var file_endpointpool_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_endpointpool_proto_goTypes = []any{
-	(*Address)(nil),  // 0: endpointpool.Address
-	(*Request)(nil),  // 1: endpointpool.Request
-	(*Response)(nil), // 2: endpointpool.Response
+	(*Address)(nil),          // 0: endpointpool.Address
+	(*EndpointRequest)(nil),  // 1: endpointpool.EndpointRequest
+	(*EndpointResponse)(nil), // 2: endpointpool.EndpointResponse
 }
 var file_endpointpool_proto_depIdxs = []int32{
-	0, // 0: endpointpool.Response.addresses:type_name -> endpointpool.Address
+	0, // 0: endpointpool.EndpointResponse.addresses:type_name -> endpointpool.Address
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
