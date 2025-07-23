@@ -1,21 +1,21 @@
-package device
+package tun
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"sync"
 
+	"github.com/bajacc/tinescale/pkg/helper"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 )
 
-type interceptTun struct {
+type InterceptTun struct {
 	inner tun.Device
 	log   *wgdevice.Logger
 
@@ -34,10 +34,23 @@ type interceptTun struct {
 	cancel context.CancelFunc
 }
 
-func NewTunDevice(logger *wgdevice.Logger, tun tun.Device) *interceptTun {
+type ReadResult struct {
+	bufs  [][]byte
+	sizes []int
+	n     int
+	err   error
+}
+
+type PubKeyPacket struct {
+	src  wgdevice.NoisePublicKey
+	dst  wgdevice.NoisePublicKey
+	data []byte
+}
+
+func New(logger *wgdevice.Logger, tun tun.Device) *InterceptTun {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	t := &interceptTun{
+	t := &InterceptTun{
 		inner:      tun,
 		log:        logger,
 		localNet:   netip.MustParsePrefix("fd00::/8"),
@@ -54,10 +67,10 @@ func NewTunDevice(logger *wgdevice.Logger, tun tun.Device) *interceptTun {
 	return t
 }
 
-func (t *interceptTun) SetLocalKey(localKey wgdevice.NoisePublicKey) error {
+func (t *InterceptTun) SetLocalKey(localKey wgdevice.NoisePublicKey) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	localIp, ok := PublicKeyToIP(t.localNet, localKey)
+	localIp, ok := helper.PublicKeyToIP(t.localNet, localKey)
 	if !ok {
 		return fmt.Errorf("cannot convert %s to ip", localKey)
 	}
@@ -67,17 +80,17 @@ func (t *interceptTun) SetLocalKey(localKey wgdevice.NoisePublicKey) error {
 	return nil
 }
 
-func (t *interceptTun) SetLocaNet(localNet netip.Prefix) error {
+func (t *InterceptTun) SetLocaNet(localNet netip.Prefix) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	localIp, ok := PublicKeyToIP(localNet, t.localKey)
+	localIp, ok := helper.PublicKeyToIP(localNet, t.localKey)
 	if !ok {
 		return fmt.Errorf("cannot convert %s to ip", t.localKey)
 	}
 
 	newIpToKey := make(map[netip.Addr]wgdevice.NoisePublicKey)
 	for _, key := range t.ipToKey {
-		ip, ok := PublicKeyToIP(localNet, key)
+		ip, ok := helper.PublicKeyToIP(localNet, key)
 		if !ok {
 			return fmt.Errorf("cannot convert %s to ip", key)
 		}
@@ -91,12 +104,12 @@ func (t *interceptTun) SetLocaNet(localNet netip.Prefix) error {
 }
 
 // BatchSize implements tun.Device.
-func (t *interceptTun) BatchSize() int {
+func (t *InterceptTun) BatchSize() int {
 	return t.inner.BatchSize()
 }
 
 // Close implements tun.Device.
-func (t *interceptTun) Close() error {
+func (t *InterceptTun) Close() error {
 	t.cancel()
 	close(t.inboundCh)
 	close(t.outboundCh)
@@ -104,27 +117,27 @@ func (t *interceptTun) Close() error {
 }
 
 // Events implements tun.Device.
-func (t *interceptTun) Events() <-chan tun.Event {
+func (t *InterceptTun) Events() <-chan tun.Event {
 	return t.inner.Events()
 }
 
 // File implements tun.Device.
-func (t *interceptTun) File() *os.File {
+func (t *InterceptTun) File() *os.File {
 	return t.inner.File()
 }
 
 // MTU implements tun.Device.
-func (t *interceptTun) MTU() (int, error) {
+func (t *InterceptTun) MTU() (int, error) {
 	return t.inner.MTU()
 }
 
 // Name implements tun.Device.
-func (t *interceptTun) Name() (string, error) {
+func (t *InterceptTun) Name() (string, error) {
 	return t.inner.Name()
 }
 
-func (t *interceptTun) addPeer(key wgdevice.NoisePublicKey) error {
-	ip, ok := PublicKeyToIP(t.localNet, key)
+func (t *InterceptTun) AddPeer(key wgdevice.NoisePublicKey) error {
+	ip, ok := helper.PublicKeyToIP(t.localNet, key)
 	if !ok {
 		return fmt.Errorf("could not create ip from public key")
 	}
@@ -138,22 +151,9 @@ func (t *interceptTun) addPeer(key wgdevice.NoisePublicKey) error {
 	return nil
 }
 
-type ReadResult struct {
-	bufs  [][]byte
-	sizes []int
-	n     int
-	err   error
-}
-
-type PubKeyPacket struct {
-	src  wgdevice.NoisePublicKey
-	dst  wgdevice.NoisePublicKey
-	data []byte
-}
-
-func (t *interceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool) {
-	srcIP, ok1 := PublicKeyToIP(t.localNet, pkPkt.src)
-	dstIP, ok2 := PublicKeyToIP(t.localNet, pkPkt.dst)
+func (t *InterceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool) {
+	srcIP, ok1 := helper.PublicKeyToIP(t.localNet, pkPkt.src)
+	dstIP, ok2 := helper.PublicKeyToIP(t.localNet, pkPkt.dst)
 	if !ok1 || !ok2 {
 		return 0, false
 	}
@@ -172,7 +172,7 @@ func (t *interceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool)
 	}
 }
 
-func (t *interceptTun) toPubKeyPacket(pkPkt *PubKeyPacket, ipPkt []byte) bool {
+func (t *InterceptTun) toPubKeyPacket(pkPkt *PubKeyPacket, ipPkt []byte) bool {
 	if len(ipPkt) == 0 {
 		return false
 	}
@@ -186,7 +186,6 @@ func (t *interceptTun) toPubKeyPacket(pkPkt *PubKeyPacket, ipPkt []byte) bool {
 		if len(ipPkt) < ipv4.HeaderLen {
 			return false
 		}
-
 		headerLen = ipv4.HeaderLen // header length without extension headers
 		dst = ipPkt[wgdevice.IPv4offsetDst : wgdevice.IPv4offsetDst+net.IPv4len]
 		src = ipPkt[wgdevice.IPv4offsetSrc : wgdevice.IPv4offsetSrc+net.IPv4len]
@@ -218,8 +217,20 @@ func (t *interceptTun) toPubKeyPacket(pkPkt *PubKeyPacket, ipPkt []byte) bool {
 	return true
 }
 
+func (t *InterceptTun) GetInboundPacket() <-chan *PubKeyPacket {
+	return t.inboundCh
+}
+
+func (t *InterceptTun) SendPubKeyPacket(dst wgdevice.NoisePublicKey, data []byte) {
+	t.outboundCh <- &PubKeyPacket{
+		src:  t.localKey,
+		dst:  dst,
+		data: data,
+	}
+}
+
 // Read implements tun.Device.
-func (t *interceptTun) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+func (t *InterceptTun) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	for {
 		select {
 		case <-t.ctx.Done():
@@ -244,15 +255,14 @@ func (t *interceptTun) Read(bufs [][]byte, sizes []int, offset int) (int, error)
 			if n, ok := t.toIpPacket(bufs[0][offset:], packet); ok {
 				sizes[0] = n
 				return 1, nil
-			} else {
-				continue // drop silently
 			}
+			continue // drop silently
 		}
 	}
 }
 
 // Write implements tun.Device.
-func (t *interceptTun) Write(bufs [][]byte, offset int) (int, error) {
+func (t *InterceptTun) Write(bufs [][]byte, offset int) (int, error) {
 	var newBufs [][]byte
 	write := 0
 	for i := 0; i < len(bufs); i++ {
@@ -272,11 +282,11 @@ func (t *interceptTun) Write(bufs [][]byte, offset int) (int, error) {
 	return tunWrite + write, nil
 }
 
-func (t *interceptTun) routineReadFromTUN() {
+func (t *InterceptTun) routineReadFromTUN() {
+	defer close(t.readCh)
 	for {
 		select {
 		case <-t.ctx.Done():
-			close(t.readCh)
 			return
 		default:
 		}
@@ -298,24 +308,8 @@ func (t *interceptTun) routineReadFromTUN() {
 			n:     n,
 			err:   err,
 		}
+		if err == net.ErrClosed {
+			return
+		}
 	}
-}
-
-// PublicKeyToIP converts a public key to an IP address
-func PublicKeyToIP(prefix netip.Prefix, key wgdevice.NoisePublicKey) (netip.Addr, bool) {
-	// Hash the public key
-	hash := sha256.Sum256(key[:])
-
-	networkAddr := prefix.Addr()
-	prefixLen := prefix.Bits()
-	prefixBytes := prefixLen / 8
-	remainingBits := prefixLen % 8
-
-	result := networkAddr.AsSlice()
-
-	mask := byte(0xFF << remainingBits)
-	result[prefixBytes] |= hash[prefixBytes] & ^mask
-	copy(result[prefixBytes+1:], hash[prefixBytes+1:])
-
-	return netip.AddrFromSlice(result)
 }

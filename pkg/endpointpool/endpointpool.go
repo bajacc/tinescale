@@ -69,7 +69,7 @@ func (e *endpointPool) GetAllEndpoints(key wgdevice.NoisePublicKey) []conn.Endpo
 	if peer, exists := e.pool[key]; exists {
 		peer.mu.RLock()
 		defer peer.mu.RUnlock()
-		return append([]conn.Endpoint{}, peer.eps...)
+		return append([]conn.Endpoint(nil), peer.eps...)
 	}
 	return nil
 }

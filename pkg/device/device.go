@@ -7,9 +7,10 @@ import (
 
 	"github.com/bajacc/tinescale/pkg/derppool"
 	"github.com/bajacc/tinescale/pkg/stunPool"
+	"github.com/bajacc/tinescale/pkg/tun"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/tun"
+	wgtun "golang.zx2c4.com/wireguard/tun"
 )
 
 type DeviceInterface interface {
@@ -26,7 +27,7 @@ type Device struct {
 	log      *wgdevice.Logger
 	ipcMutex sync.RWMutex
 
-	tun *interceptTun
+	tun *tun.InterceptTun
 
 	net struct {
 		sync.RWMutex
@@ -73,10 +74,10 @@ func (device *Device) Close() {
 	device.derpPool.Close()
 }
 
-func NewDevice(tun tun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceInterface {
+func NewDevice(t wgtun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceInterface {
 	var device Device
-	device.tun = NewTunDevice(logger, tun)
 	device.log = logger
+	device.tun = tun.New(logger, t)
 	device.derpPool = derppool.New(logger)
 	device.net.bind = NewBind(bind, &device, logger)
 	device.inner = wgdevice.NewDevice(device.tun, device.net.bind, logger)

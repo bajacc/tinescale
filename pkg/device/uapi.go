@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bajacc/tinescale/pkg/helper"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/ipc"
@@ -212,7 +213,7 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 	if !config.updateOnly {
 		ir.log.Verbosef("UAPI(tinescale): creating peer with public key %s", config.publicKeyString)
 		ir.device.peers.keyMap[config.publicKey] = &Peer{}
-		ir.device.tun.addPeer(config.publicKey)
+		ir.device.tun.AddPeer(config.publicKey)
 	}
 	peer := ir.device.peers.keyMap[config.publicKey]
 
@@ -407,7 +408,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 		ir.device.staticIdentity.Lock()
 		defer ir.device.staticIdentity.Unlock()
 		ir.device.staticIdentity.privateKey = sk
-		ir.device.staticIdentity.publicKey = publicKey(&sk)
+		ir.device.staticIdentity.publicKey = helper.PublicKey(&sk)
 		ir.device.tun.SetLocalKey(ir.device.staticIdentity.publicKey)
 		return ir.bufferBytesAndRead(p)
 	case "listen_port":
