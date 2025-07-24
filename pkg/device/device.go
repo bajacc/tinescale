@@ -37,7 +37,7 @@ type Device struct {
 	}
 	stunPool     stunPool.StunPool
 	derpPool     derppool.DerpPool
-	endpointpool endpointpool.EndpointPool
+	endpointPool endpointpool.EndpointPool
 
 	// the following fields are mirrors from wg device
 
@@ -84,7 +84,7 @@ func NewDevice(t wgtun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceIn
 	device.derpPool = derppool.New(logger)
 	device.stunPool = stunPool.New(30*time.Second, 5*time.Second, logger)
 	device.net.bind = NewBind(bind, &device, logger)
-	device.endpointpool = endpointpool.New(logger, device.tun, device.net.bind, device.stunPool, 5*time.Second)
+	device.endpointPool = endpointpool.New(logger, device.tun, bind, device.stunPool, 5*time.Second)
 	device.inner = wgdevice.NewDevice(device.tun, device.net.bind, logger)
 
 	return &device

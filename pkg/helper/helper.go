@@ -5,6 +5,7 @@ import (
 	"net/netip"
 
 	"golang.org/x/crypto/curve25519"
+	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 )
 
@@ -32,4 +33,8 @@ func PublicKeyToIP(prefix netip.Prefix, key wgdevice.NoisePublicKey) (netip.Addr
 	copy(result[prefixBytes+1:], hash[prefixBytes+1:])
 
 	return netip.AddrFromSlice(result)
+}
+
+type EndpointParser interface {
+	ParseEndpoint(s string) (conn.Endpoint, error)
 }

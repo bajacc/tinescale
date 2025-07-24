@@ -196,7 +196,6 @@ func (t *InterceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool)
 }
 
 func (t *InterceptTun) toPubKeyPacket(ipPkt []byte) (*PubKeyPacket, bool) {
-	t.log.Verbosef("toPubKeyPacket")
 	if len(ipPkt) == 0 {
 		return nil, false
 	}
@@ -228,7 +227,6 @@ func (t *InterceptTun) toPubKeyPacket(ipPkt []byte) (*PubKeyPacket, bool) {
 	if !ok1 || !ok2 {
 		return nil, false
 	}
-	t.log.Verbosef("received src %s, dst %s", ipSrc, ipDst)
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	keySrc, ok1 := t.ipToKey[ipSrc]
@@ -241,7 +239,6 @@ func (t *InterceptTun) toPubKeyPacket(ipPkt []byte) (*PubKeyPacket, bool) {
 		dst:  keyDst,
 		data: append([]byte(nil), ipPkt[headerLen:]...), // deep copy
 	}
-	t.log.Verbosef("received key src %x, key dst %x dataLen %d ipPktLen %d", keySrc, keyDst, len(pkPkt.data), len(ipPkt))
 	return pkPkt, true
 }
 
@@ -280,10 +277,8 @@ func (t *InterceptTun) Read(bufs [][]byte, sizes []int, offset int) (int, error)
 				return 0, net.ErrClosed
 			}
 
-			t.log.Verbosef("sending src %x std %x DataLen %d bufLen %d", packet.Src(), packet.Dst(), len(packet.Data()), len(bufs[0][offset:]))
 			if n, ok := t.toIpPacket(bufs[0][offset:], packet); ok {
 				sizes[0] = n
-				t.log.Verbosef("sizes[0]=%d offset=%d %x", sizes[0], offset, bufs[0][offset:offset+sizes[0]])
 				return 1, nil
 			}
 			continue // drop silently
@@ -297,9 +292,7 @@ func (t *InterceptTun) Write(bufs [][]byte, offset int) (int, error) {
 	write := 0
 	for i := 0; i < len(bufs); i++ {
 		packet := bufs[i][offset:]
-		t.log.Verbosef("packetLen %d %x", len(bufs[i][offset:]), bufs[i][offset:])
 		if pkPacket, ok := t.toPubKeyPacket(packet); ok {
-			t.log.Verbosef("iii packetLen %d %x %x", len(bufs[i][offset:]), bufs[i][offset:], pkPacket.Data())
 			t.inboundCh <- pkPacket
 			write += 1
 		} else {

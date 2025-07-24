@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bajacc/tinescale/pkg/helper"
 	"github.com/bajacc/tinescale/pkg/stunPool"
 	"github.com/bajacc/tinescale/pkg/tun"
 	"golang.zx2c4.com/wireguard/conn"
@@ -24,6 +25,7 @@ type EndpointPool interface {
 	AddPeer(key wgdevice.NoisePublicKey)
 	RemovePeer(key wgdevice.NoisePublicKey)
 	SetListenPort(listenPort uint16)
+	SetUAPIEndpoint(key wgdevice.NoisePublicKey, ep conn.Endpoint)
 }
 
 type endpointPool struct {
@@ -34,19 +36,21 @@ type endpointPool struct {
 	listenPort uint16
 
 	tun            *tun.InterceptTun
-	bind           conn.Bind
+	epParser       helper.EndpointParser
 	updateInterval time.Duration
 	requestTimeout time.Duration
-	ctx            context.Context
-	cancel         context.CancelFunc
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 type peerEndpoints struct {
-	mu  sync.RWMutex
-	eps []conn.Endpoint
+	mu           sync.RWMutex
+	msgEndpoints []conn.Endpoint
+	uapiEndpoint conn.Endpoint
 }
 
-func New(logger *wgdevice.Logger, tun *tun.InterceptTun, bind conn.Bind, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
+func New(logger *wgdevice.Logger, tun *tun.InterceptTun, epParser helper.EndpointParser, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &endpointPool{
@@ -54,7 +58,7 @@ func New(logger *wgdevice.Logger, tun *tun.InterceptTun, bind conn.Bind, stunPoo
 		pool:           make(map[wgdevice.NoisePublicKey]*peerEndpoints),
 		stunPool:       stunPool,
 		tun:            tun,
-		bind:           bind,
+		epParser:       epParser,
 		updateInterval: updateInterval,
 		requestTimeout: 5 * time.Second,
 		ctx:            ctx,
@@ -83,16 +87,36 @@ func (e *endpointPool) SetListenPort(listenPort uint16) {
 	e.listenPort = listenPort
 }
 
+func (e *endpointPool) SetUAPIEndpoint(key wgdevice.NoisePublicKey, ep conn.Endpoint) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	peer, exists := e.pool[key]
+	if !exists {
+		return
+	}
+	peer.mu.Lock()
+	defer peer.mu.Unlock()
+	peer.uapiEndpoint = ep
+}
+
 func (e *endpointPool) GetAllEndpoints(key wgdevice.NoisePublicKey) []conn.Endpoint {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	if peer, exists := e.pool[key]; exists {
-		peer.mu.RLock()
-		defer peer.mu.RUnlock()
-		return append([]conn.Endpoint(nil), peer.eps...)
+	peer, exists := e.pool[key]
+	if !exists {
+		return nil
 	}
-	return nil
+
+	var result []conn.Endpoint
+	peer.mu.RLock()
+	defer peer.mu.RUnlock()
+	result = append(result, peer.msgEndpoints...)
+	if peer.uapiEndpoint != nil {
+		result = append(result, peer.uapiEndpoint)
+	}
+	return result
 }
 
 // AddPeer adds a new peer and starts periodic endpoint updates
@@ -188,10 +212,8 @@ func (e *endpointPool) handleIncomingPackets(ctx context.Context) {
 
 			switch msg := wrapper.MessageType.(type) {
 			case *MessageWrapper_EndpointRequest:
-				e.log.Verbosef("received pub key request packet %x %x %s %x", packet.Src(), packet.Dst(), msg.EndpointRequest.String(), packet.Data())
 				e.handleEndpointRequest(packet.Src(), msg.EndpointRequest)
 			case *MessageWrapper_EndpointResponse:
-				e.log.Verbosef("received pub key response packet %x %x %s", packet.Src(), packet.Dst(), msg.EndpointResponse.String())
 				e.processEndpointResponse(packet.Src(), msg.EndpointResponse)
 			default:
 				e.log.Verbosef("Failed to unmarshal packet from peer %x as request or response", packet.Src())
@@ -214,7 +236,7 @@ func (e *endpointPool) processEndpointResponse(peerKey wgdevice.NoisePublicKey, 
 	var newEndpoints []conn.Endpoint
 	for _, addr := range response.Addresses {
 		endpointStr := fmt.Sprintf("%s:%d", net.IP(addr.Ip), addr.Port)
-		connEndpoint, err := e.bind.ParseInnerEndpoint(endpointStr)
+		connEndpoint, err := e.epParser.ParseEndpoint(endpointStr)
 		if err != nil {
 			e.log.Errorf("Failed to parse endpoint %s: %v", endpointStr, err)
 			continue
@@ -223,10 +245,10 @@ func (e *endpointPool) processEndpointResponse(peerKey wgdevice.NoisePublicKey, 
 	}
 
 	peer.mu.Lock()
-	peer.eps = newEndpoints
+	peer.msgEndpoints = newEndpoints
 	peer.mu.Unlock()
 
-	e.log.Verbosef("Updated %d endpoints for peer %x", len(newEndpoints), peerKey[:8])
+	e.log.Verbosef("Updated %d endpoints for peer %x", len(newEndpoints), peerKey, response.Addresses)
 }
 
 // handleEndpointRequest processes incoming endpoint requests and sends a response
@@ -249,7 +271,6 @@ func (e *endpointPool) handleEndpointRequest(peerKey wgdevice.NoisePublicKey, re
 		return
 	}
 
-	e.log.Verbosef("Sent endpoint response with %d addresses to peer %x, dataLen %d %x", len(response.Addresses), peerKey, len(data), data)
 	e.tun.SendPubKeyPacket(peerKey, data)
 }
 
@@ -264,7 +285,7 @@ func (e *endpointPool) getLocalEndpoints() []*Address {
 func (e *endpointPool) getStunEndpoints() []*Address {
 	var result []*Address
 
-	// 1. Get STUN-discovered public endpoints
+	// Get STUN-discovered public endpoints
 	stunResults := e.stunPool.GetAllResults()
 	for _, stunResult := range stunResults {
 		if stunResult.Err != nil {
@@ -296,7 +317,6 @@ func (e *endpointPool) getPrivateEndpoints() []*Address {
 			continue
 		}
 		ifaceAddr = append(ifaceAddr, addrs...)
-
 	}
 
 	var result []*Address
