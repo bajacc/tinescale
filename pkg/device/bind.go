@@ -35,26 +35,11 @@ func (b *Bind) udpToTinescaleEndpoint(udpEp conn.Endpoint) *Endpoint {
 	b.device.peers.RLock()
 	defer b.device.peers.RUnlock()
 
-	for pubKey, peer := range b.device.peers.keyMap {
-		ep := func() *Endpoint {
-			peer.endpoint.RLock()
-			defer peer.endpoint.RUnlock()
-			if peer.endpoint.uapi != nil && peer.endpoint.uapi.DstToString() == udpEp.DstToString() {
-				return &Endpoint{origPubKey: pubKey}
-			}
-
-			for _, stunEndpoint := range peer.endpoint.stun {
-				if stunEndpoint.DstToString() == udpEp.DstToString() {
-					return &Endpoint{origPubKey: pubKey}
-				}
-			}
-			return nil
-		}()
-		if ep != nil {
-			return ep
-		}
+	key, exists := b.device.endpointPool.FindKey(udpEp)
+	if !exists {
+		return nil
 	}
-	return nil
+	return &Endpoint{origPubKey: *key}
 }
 
 // ClearSrc implements conn.Endpoint.
@@ -177,27 +162,13 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 	}
 	b.device.peers.RLock()
 	defer b.device.peers.RUnlock()
-	peer, ok := b.device.peers.keyMap[ep.origPubKey]
-	if !ok {
-		return fmt.Errorf("peer with public key %s not found", ep.origPubKey)
-	}
-
-	peer.endpoint.RLock()
-	defer peer.endpoint.RUnlock()
 
 	var err error
-
-	// send via uapi configured endpoints
-	if peer.endpoint.uapi != nil {
-		err = b.inner.Send(bufs, peer.endpoint.uapi)
-		if err == nil {
-			return nil
-		}
-	}
+	endpoints := b.device.endpointPool.GetAllEndpoints(ep.origPubKey)
 
 	// else send via stun configured endpoints
-	for _, stunEndpoint := range peer.endpoint.stun {
-		err = b.inner.Send(bufs, stunEndpoint)
+	for _, endpoint := range endpoints {
+		err = b.inner.Send(bufs, endpoint)
 		if err == nil {
 			return nil
 		}

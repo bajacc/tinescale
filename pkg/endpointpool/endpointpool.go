@@ -26,6 +26,7 @@ type EndpointPool interface {
 	RemovePeer(key wgdevice.NoisePublicKey)
 	SetListenPort(listenPort uint16)
 	SetUAPIEndpoint(key wgdevice.NoisePublicKey, ep conn.Endpoint)
+	FindKey(ep conn.Endpoint) (*wgdevice.NoisePublicKey, bool)
 }
 
 type endpointPool struct {
@@ -117,6 +118,27 @@ func (e *endpointPool) GetAllEndpoints(key wgdevice.NoisePublicKey) []conn.Endpo
 		result = append(result, peer.uapiEndpoint)
 	}
 	return result
+}
+
+func (e *endpointPool) FindKey(ep conn.Endpoint) (*wgdevice.NoisePublicKey, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	for key, peer := range e.pool {
+		peer.mu.RLock()
+		if peer.uapiEndpoint.DstToString() == ep.DstToString() {
+			peer.mu.RUnlock()
+			return &key, true
+		}
+		for _, msgEp := range peer.msgEndpoints {
+			if msgEp.DstToString() == ep.DstToString() {
+				peer.mu.RUnlock()
+				return &key, true
+			}
+		}
+		peer.mu.RUnlock()
+	}
+	return nil, false
 }
 
 // AddPeer adds a new peer and starts periodic endpoint updates
