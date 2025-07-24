@@ -87,8 +87,10 @@ func (t *InterceptTun) SetLocalKey(localKey wgdevice.NoisePublicKey) error {
 		return fmt.Errorf("cannot convert %s to ip", localKey)
 	}
 
+	delete(t.ipToKey, t.localIp)
 	t.localKey = localKey
 	t.localIp = localIp
+	t.ipToKey[t.localIp] = t.localKey
 	return nil
 }
 
@@ -172,21 +174,31 @@ func (t *InterceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool)
 	src := srcIP.AsSlice()
 	dst := dstIP.AsSlice()
 	if srcIP.Is4() {
+		pktLen := len(pkPkt.data) + ipv4.HeaderLen
+		ipPkt[0] = 0x40
+		ipPkt[wgdevice.IPv4offsetTotalLength] = byte(pktLen >> 8)
+		ipPkt[wgdevice.IPv4offsetTotalLength+1] = byte(pktLen & 0xFF)
 		copy(ipPkt[wgdevice.IPv4offsetDst:wgdevice.IPv4offsetDst+net.IPv4len], dst)
 		copy(ipPkt[wgdevice.IPv4offsetSrc:wgdevice.IPv4offsetSrc+net.IPv4len], src)
 		copy(ipPkt[ipv4.HeaderLen:], pkPkt.data) // header length without extension headers
-		return len(pkPkt.data) + ipv4.HeaderLen, true
-	} else {
+		return pktLen, true
+	} else if srcIP.Is6() {
+		payloadLen := len(pkPkt.data)
+		ipPkt[0] = 0x60
+		ipPkt[wgdevice.IPv6offsetPayloadLength] = byte(payloadLen >> 8)
+		ipPkt[wgdevice.IPv6offsetPayloadLength+1] = byte(payloadLen & 0xFF)
 		copy(ipPkt[wgdevice.IPv6offsetDst:wgdevice.IPv6offsetDst+net.IPv6len], dst)
 		copy(ipPkt[wgdevice.IPv6offsetSrc:wgdevice.IPv6offsetSrc+net.IPv6len], src)
 		copy(ipPkt[ipv6.HeaderLen:], pkPkt.data)
-		return len(pkPkt.data) + ipv6.HeaderLen, true
+		return payloadLen + ipv6.HeaderLen, true
 	}
+	return 0, false
 }
 
-func (t *InterceptTun) toPubKeyPacket(pkPkt *PubKeyPacket, ipPkt []byte) bool {
+func (t *InterceptTun) toPubKeyPacket(ipPkt []byte) (*PubKeyPacket, bool) {
+	t.log.Verbosef("toPubKeyPacket")
 	if len(ipPkt) == 0 {
-		return false
+		return nil, false
 	}
 
 	var dst []byte
@@ -196,37 +208,41 @@ func (t *InterceptTun) toPubKeyPacket(pkPkt *PubKeyPacket, ipPkt []byte) bool {
 	switch ipPkt[0] >> 4 {
 	case 4:
 		if len(ipPkt) < ipv4.HeaderLen {
-			return false
+			return nil, false
 		}
 		headerLen = ipv4.HeaderLen // header length without extension headers
 		dst = ipPkt[wgdevice.IPv4offsetDst : wgdevice.IPv4offsetDst+net.IPv4len]
 		src = ipPkt[wgdevice.IPv4offsetSrc : wgdevice.IPv4offsetSrc+net.IPv4len]
 	case 6:
 		if len(ipPkt) < ipv6.HeaderLen {
-			return false
+			return nil, false
 		}
 		headerLen = ipv6.HeaderLen
 		dst = ipPkt[wgdevice.IPv6offsetDst : wgdevice.IPv6offsetDst+net.IPv6len]
 		src = ipPkt[wgdevice.IPv6offsetSrc : wgdevice.IPv6offsetSrc+net.IPv6len]
 	default:
-		return false
+		return nil, false
 	}
 	ipSrc, ok1 := netip.AddrFromSlice(src)
 	ipDst, ok2 := netip.AddrFromSlice(dst)
 	if !ok1 || !ok2 {
-		return false
+		return nil, false
 	}
+	t.log.Verbosef("received src %s, dst %s", ipSrc, ipDst)
 	t.mu.RLock()
-	defer t.mu.Unlock()
+	defer t.mu.RUnlock()
 	keySrc, ok1 := t.ipToKey[ipSrc]
 	keyDst, ok2 := t.ipToKey[ipDst]
 	if !ok1 || !ok2 {
-		return false
+		return nil, false
 	}
-	pkPkt.src = keySrc
-	pkPkt.dst = keyDst
-	pkPkt.data = append([]byte(nil), ipPkt[headerLen:]...) // deep copy
-	return true
+	pkPkt := &PubKeyPacket{
+		src:  keySrc,
+		dst:  keyDst,
+		data: append([]byte(nil), ipPkt[headerLen:]...), // deep copy
+	}
+	t.log.Verbosef("received key src %x, key dst %x dataLen %d ipPktLen %d", keySrc, keyDst, len(pkPkt.data), len(ipPkt))
+	return pkPkt, true
 }
 
 func (t *InterceptTun) GetInboundPacketCh() <-chan *PubKeyPacket {
@@ -255,17 +271,19 @@ func (t *InterceptTun) Read(bufs [][]byte, sizes []int, offset int) (int, error)
 				return result.n, result.err
 			}
 			copy(sizes, result.sizes)
-			for i := range result.bufs {
+			for i := range result.n {
 				copy(bufs[i][offset:], result.bufs[i][:sizes[i]])
 			}
-			return len(result.bufs), nil
+			return result.n, nil
 		case packet, ok := <-t.outboundCh:
 			if !ok {
 				return 0, net.ErrClosed
 			}
 
+			t.log.Verbosef("sending src %x std %x DataLen %d bufLen %d", packet.Src(), packet.Dst(), len(packet.Data()), len(bufs[0][offset:]))
 			if n, ok := t.toIpPacket(bufs[0][offset:], packet); ok {
 				sizes[0] = n
+				t.log.Verbosef("sizes[0]=%d offset=%d %x", sizes[0], offset, bufs[0][offset:offset+sizes[0]])
 				return 1, nil
 			}
 			continue // drop silently
@@ -279,9 +297,10 @@ func (t *InterceptTun) Write(bufs [][]byte, offset int) (int, error) {
 	write := 0
 	for i := 0; i < len(bufs); i++ {
 		packet := bufs[i][offset:]
-		var pkPacket PubKeyPacket
-		if ok := t.toPubKeyPacket(&pkPacket, packet); ok {
-			t.inboundCh <- &pkPacket
+		t.log.Verbosef("packetLen %d %x", len(bufs[i][offset:]), bufs[i][offset:])
+		if pkPacket, ok := t.toPubKeyPacket(packet); ok {
+			t.log.Verbosef("iii packetLen %d %x %x", len(bufs[i][offset:]), bufs[i][offset:], pkPacket.Data())
+			t.inboundCh <- pkPacket
 			write += 1
 		} else {
 			newBufs = append(newBufs, bufs[i])

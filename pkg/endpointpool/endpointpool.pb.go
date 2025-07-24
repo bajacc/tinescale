@@ -21,6 +21,88 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type MessageWrapper struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to MessageType:
+	//
+	//	*MessageWrapper_EndpointRequest
+	//	*MessageWrapper_EndpointResponse
+	MessageType   isMessageWrapper_MessageType `protobuf_oneof:"message_type"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MessageWrapper) Reset() {
+	*x = MessageWrapper{}
+	mi := &file_endpointpool_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MessageWrapper) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MessageWrapper) ProtoMessage() {}
+
+func (x *MessageWrapper) ProtoReflect() protoreflect.Message {
+	mi := &file_endpointpool_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MessageWrapper.ProtoReflect.Descriptor instead.
+func (*MessageWrapper) Descriptor() ([]byte, []int) {
+	return file_endpointpool_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *MessageWrapper) GetMessageType() isMessageWrapper_MessageType {
+	if x != nil {
+		return x.MessageType
+	}
+	return nil
+}
+
+func (x *MessageWrapper) GetEndpointRequest() *EndpointRequest {
+	if x != nil {
+		if x, ok := x.MessageType.(*MessageWrapper_EndpointRequest); ok {
+			return x.EndpointRequest
+		}
+	}
+	return nil
+}
+
+func (x *MessageWrapper) GetEndpointResponse() *EndpointResponse {
+	if x != nil {
+		if x, ok := x.MessageType.(*MessageWrapper_EndpointResponse); ok {
+			return x.EndpointResponse
+		}
+	}
+	return nil
+}
+
+type isMessageWrapper_MessageType interface {
+	isMessageWrapper_MessageType()
+}
+
+type MessageWrapper_EndpointRequest struct {
+	EndpointRequest *EndpointRequest `protobuf:"bytes,1,opt,name=endpoint_request,json=endpointRequest,proto3,oneof"`
+}
+
+type MessageWrapper_EndpointResponse struct {
+	EndpointResponse *EndpointResponse `protobuf:"bytes,2,opt,name=endpoint_response,json=endpointResponse,proto3,oneof"`
+}
+
+func (*MessageWrapper_EndpointRequest) isMessageWrapper_MessageType() {}
+
+func (*MessageWrapper_EndpointResponse) isMessageWrapper_MessageType() {}
+
 type Address struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ip            []byte                 `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
@@ -31,7 +113,7 @@ type Address struct {
 
 func (x *Address) Reset() {
 	*x = Address{}
-	mi := &file_endpointpool_proto_msgTypes[0]
+	mi := &file_endpointpool_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -43,7 +125,7 @@ func (x *Address) String() string {
 func (*Address) ProtoMessage() {}
 
 func (x *Address) ProtoReflect() protoreflect.Message {
-	mi := &file_endpointpool_proto_msgTypes[0]
+	mi := &file_endpointpool_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -56,7 +138,7 @@ func (x *Address) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Address.ProtoReflect.Descriptor instead.
 func (*Address) Descriptor() ([]byte, []int) {
-	return file_endpointpool_proto_rawDescGZIP(), []int{0}
+	return file_endpointpool_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Address) GetIp() []byte {
@@ -82,7 +164,7 @@ type EndpointRequest struct {
 
 func (x *EndpointRequest) Reset() {
 	*x = EndpointRequest{}
-	mi := &file_endpointpool_proto_msgTypes[1]
+	mi := &file_endpointpool_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -94,7 +176,7 @@ func (x *EndpointRequest) String() string {
 func (*EndpointRequest) ProtoMessage() {}
 
 func (x *EndpointRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_endpointpool_proto_msgTypes[1]
+	mi := &file_endpointpool_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -107,7 +189,7 @@ func (x *EndpointRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndpointRequest.ProtoReflect.Descriptor instead.
 func (*EndpointRequest) Descriptor() ([]byte, []int) {
-	return file_endpointpool_proto_rawDescGZIP(), []int{1}
+	return file_endpointpool_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *EndpointRequest) GetRequestId() uint32 {
@@ -127,7 +209,7 @@ type EndpointResponse struct {
 
 func (x *EndpointResponse) Reset() {
 	*x = EndpointResponse{}
-	mi := &file_endpointpool_proto_msgTypes[2]
+	mi := &file_endpointpool_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -139,7 +221,7 @@ func (x *EndpointResponse) String() string {
 func (*EndpointResponse) ProtoMessage() {}
 
 func (x *EndpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_endpointpool_proto_msgTypes[2]
+	mi := &file_endpointpool_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -152,7 +234,7 @@ func (x *EndpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndpointResponse.ProtoReflect.Descriptor instead.
 func (*EndpointResponse) Descriptor() ([]byte, []int) {
-	return file_endpointpool_proto_rawDescGZIP(), []int{2}
+	return file_endpointpool_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *EndpointResponse) GetRequestId() uint32 {
@@ -173,7 +255,11 @@ var File_endpointpool_proto protoreflect.FileDescriptor
 
 const file_endpointpool_proto_rawDesc = "" +
 	"\n" +
-	"\x12endpointpool.proto\x12\fendpointpool\"-\n" +
+	"\x12endpointpool.proto\x12\fendpointpool\"\xbb\x01\n" +
+	"\x0eMessageWrapper\x12J\n" +
+	"\x10endpoint_request\x18\x01 \x01(\v2\x1d.endpointpool.EndpointRequestH\x00R\x0fendpointRequest\x12M\n" +
+	"\x11endpoint_response\x18\x02 \x01(\v2\x1e.endpointpool.EndpointResponseH\x00R\x10endpointResponseB\x0e\n" +
+	"\fmessage_type\"-\n" +
 	"\aAddress\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\fR\x02ip\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\"0\n" +
@@ -197,19 +283,22 @@ func file_endpointpool_proto_rawDescGZIP() []byte {
 	return file_endpointpool_proto_rawDescData
 }
 
-var file_endpointpool_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_endpointpool_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_endpointpool_proto_goTypes = []any{
-	(*Address)(nil),          // 0: endpointpool.Address
-	(*EndpointRequest)(nil),  // 1: endpointpool.EndpointRequest
-	(*EndpointResponse)(nil), // 2: endpointpool.EndpointResponse
+	(*MessageWrapper)(nil),   // 0: endpointpool.MessageWrapper
+	(*Address)(nil),          // 1: endpointpool.Address
+	(*EndpointRequest)(nil),  // 2: endpointpool.EndpointRequest
+	(*EndpointResponse)(nil), // 3: endpointpool.EndpointResponse
 }
 var file_endpointpool_proto_depIdxs = []int32{
-	0, // 0: endpointpool.EndpointResponse.addresses:type_name -> endpointpool.Address
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 0: endpointpool.MessageWrapper.endpoint_request:type_name -> endpointpool.EndpointRequest
+	3, // 1: endpointpool.MessageWrapper.endpoint_response:type_name -> endpointpool.EndpointResponse
+	1, // 2: endpointpool.EndpointResponse.addresses:type_name -> endpointpool.Address
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_endpointpool_proto_init() }
@@ -217,13 +306,17 @@ func file_endpointpool_proto_init() {
 	if File_endpointpool_proto != nil {
 		return
 	}
+	file_endpointpool_proto_msgTypes[0].OneofWrappers = []any{
+		(*MessageWrapper_EndpointRequest)(nil),
+		(*MessageWrapper_EndpointResponse)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_endpointpool_proto_rawDesc), len(file_endpointpool_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

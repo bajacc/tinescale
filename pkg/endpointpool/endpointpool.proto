@@ -4,6 +4,14 @@ package endpointpool;
 
 option go_package = "github.com/bajacc/tinescale/pkg/endpointpool";
 
+message MessageWrapper {
+  oneof message_type {
+    EndpointRequest endpoint_request = 1;
+    EndpointResponse endpoint_response = 2;
+  }
+}
+
+
 message Address {
   bytes ip = 1;
   uint32 port = 2;    // uint32 to match Go's uint16, protobuf doesn't have uint16

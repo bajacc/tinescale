@@ -23,6 +23,7 @@ type EndpointPool interface {
 	GetAllEndpoints(pubKey wgdevice.NoisePublicKey) []conn.Endpoint
 	AddPeer(key wgdevice.NoisePublicKey)
 	RemovePeer(key wgdevice.NoisePublicKey)
+	SetListenPort(listenPort uint16)
 }
 
 type endpointPool struct {
@@ -45,12 +46,13 @@ type peerEndpoints struct {
 	eps []conn.Endpoint
 }
 
-func New(logger *wgdevice.Logger, tun *tun.InterceptTun, bind conn.Bind, updateInterval time.Duration) EndpointPool {
+func New(logger *wgdevice.Logger, tun *tun.InterceptTun, bind conn.Bind, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &endpointPool{
 		log:            logger,
 		pool:           make(map[wgdevice.NoisePublicKey]*peerEndpoints),
+		stunPool:       stunPool,
 		tun:            tun,
 		bind:           bind,
 		updateInterval: updateInterval,
@@ -73,6 +75,12 @@ func (e *endpointPool) Clear() {
 // Close implements EndpointPool.
 func (e *endpointPool) Close() {
 	e.cancel()
+}
+
+func (e *endpointPool) SetListenPort(listenPort uint16) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.listenPort = listenPort
 }
 
 func (e *endpointPool) GetAllEndpoints(key wgdevice.NoisePublicKey) []conn.Endpoint {
@@ -118,12 +126,14 @@ func (e *endpointPool) updateEndpointLoop(ctx context.Context) {
 	ticker := time.NewTicker(e.updateInterval)
 	defer ticker.Stop()
 
+	e.log.Verbosef("update endpoint loop")
 	for {
 		select {
 		case <-ctx.Done():
 			e.log.Verbosef("Stopping endpoint updates")
 			return
 		case <-ticker.C:
+			e.log.Verbosef("update endpoint ticker")
 			e.mu.RLock()
 			for key := range e.pool {
 				if err := e.requestEndpoints(key); err != nil {
@@ -140,14 +150,18 @@ func (e *endpointPool) requestEndpoints(peerKey wgdevice.NoisePublicKey) error {
 	request := &EndpointRequest{
 		RequestId: rand.Uint32(),
 	}
+	wrapper := &MessageWrapper{
+		MessageType: &MessageWrapper_EndpointRequest{
+			EndpointRequest: request,
+		},
+	}
 
-	data, err := proto.Marshal(request)
+	data, err := proto.Marshal(wrapper)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	e.tun.SendPubKeyPacket(peerKey, data)
-	e.log.Verbosef("Sent endpoint request to peer %x", peerKey[:8])
 	return nil
 }
 
@@ -158,25 +172,30 @@ func (e *endpointPool) handleIncomingPackets(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			e.log.Verbosef("endpointPool context canceled")
 			return
 		case packet, ok := <-inboundCh:
 			if !ok {
+				e.log.Verbosef("endpointPool: inboundCh channel closed")
 				return
 			}
 
-			var request EndpointRequest
-			if err := proto.Unmarshal(packet.Data(), &request); err == nil {
-				e.handleEndpointRequest(packet.Src(), &request)
+			wrapper := &MessageWrapper{}
+			if err := proto.Unmarshal(packet.Data(), wrapper); err != nil {
+				e.log.Errorf("failed to unmarshal wrapper: %v", err)
 				continue
 			}
 
-			var response EndpointResponse
-			if err := proto.Unmarshal(packet.Data(), &response); err == nil {
-				e.processEndpointResponse(packet.Src(), &response)
-				continue
+			switch msg := wrapper.MessageType.(type) {
+			case *MessageWrapper_EndpointRequest:
+				e.log.Verbosef("received pub key request packet %x %x %s %x", packet.Src(), packet.Dst(), msg.EndpointRequest.String(), packet.Data())
+				e.handleEndpointRequest(packet.Src(), msg.EndpointRequest)
+			case *MessageWrapper_EndpointResponse:
+				e.log.Verbosef("received pub key response packet %x %x %s", packet.Src(), packet.Dst(), msg.EndpointResponse.String())
+				e.processEndpointResponse(packet.Src(), msg.EndpointResponse)
+			default:
+				e.log.Verbosef("Failed to unmarshal packet from peer %x as request or response", packet.Src())
 			}
-
-			e.log.Verbosef("Failed to unmarshal packet from peer %x as request or response", packet.Src())
 		}
 	}
 }
@@ -195,7 +214,7 @@ func (e *endpointPool) processEndpointResponse(peerKey wgdevice.NoisePublicKey, 
 	var newEndpoints []conn.Endpoint
 	for _, addr := range response.Addresses {
 		endpointStr := fmt.Sprintf("%s:%d", net.IP(addr.Ip), addr.Port)
-		connEndpoint, err := e.bind.ParseEndpoint(endpointStr)
+		connEndpoint, err := e.bind.ParseInnerEndpoint(endpointStr)
 		if err != nil {
 			e.log.Errorf("Failed to parse endpoint %s: %v", endpointStr, err)
 			continue
@@ -212,21 +231,26 @@ func (e *endpointPool) processEndpointResponse(peerKey wgdevice.NoisePublicKey, 
 
 // handleEndpointRequest processes incoming endpoint requests and sends a response
 func (e *endpointPool) handleEndpointRequest(peerKey wgdevice.NoisePublicKey, request *EndpointRequest) {
-	e.log.Verbosef("Received endpoint request from peer %x", peerKey[:8])
+	e.log.Verbosef("Received endpoint request from peer %x", peerKey)
 
 	localEndpoints := e.getLocalEndpoints()
 	response := &EndpointResponse{
 		RequestId: request.RequestId,
 		Addresses: localEndpoints,
 	}
-	data, err := proto.Marshal(response)
+	wrapper := &MessageWrapper{
+		MessageType: &MessageWrapper_EndpointResponse{
+			EndpointResponse: response,
+		},
+	}
+	data, err := proto.Marshal(wrapper)
 	if err != nil {
 		e.log.Errorf("Failed to marshal endpoint response: %v", err)
 		return
 	}
 
+	e.log.Verbosef("Sent endpoint response with %d addresses to peer %x, dataLen %d %x", len(response.Addresses), peerKey, len(data), data)
 	e.tun.SendPubKeyPacket(peerKey, data)
-	e.log.Verbosef("Sent endpoint response with %d addresses to peer %x", len(response.Addresses), peerKey[:8])
 }
 
 func (e *endpointPool) getLocalEndpoints() []*Address {

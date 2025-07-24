@@ -38,7 +38,4 @@ echo "[INFO] Assigning $ADDR to $IFACE"
 ip addr add "$ADDR" dev "$IFACE"
 ip link set up dev "$IFACE"
 
-# Wait
-while true; do
-    sleep 3600
-done
+ping "$PING_ADDR"

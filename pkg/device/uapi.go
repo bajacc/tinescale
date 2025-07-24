@@ -215,11 +215,13 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 	if !config.updateOnly {
 		ir.log.Verbosef("UAPI(tinescale): creating peer with public key %s", config.publicKeyString)
 		ir.device.peers.keyMap[config.publicKey] = &Peer{}
+		ir.device.endpointpool.AddPeer(config.publicKey)
 		peerIp, err := ir.device.tun.AddPeer(config.publicKey)
 		if err != nil {
 			return
 		}
-		allowedipLine = fmt.Sprintf("allowed_ip=%s\n", peerIp)
+		allowedipLine = fmt.Sprintf("allowed_ip=%s/%d\n", peerIp, peerIp.BitLen())
+		ir.log.Verbosef("UAPI(tinescale): send allowed_ip line %s", allowedipLine)
 		// configure the peer endpoint in wireguard device
 		// use the public key so that we can find the endpoint later in bind
 		endpointLine = fmt.Sprintf("endpoint=%s\n", config.publicKeyString)
@@ -426,6 +428,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			return 0, ir.ipcErr
 		}
 		ir.log.Verbosef("UAPI(tinescale): Updating listen port to %d", port)
+		ir.device.endpointpool.SetListenPort(uint16(port))
 		ir.device.listenPort.Lock()
 		defer ir.device.listenPort.Unlock()
 		ir.device.listenPort.val = uint16(port)
