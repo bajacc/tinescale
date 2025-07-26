@@ -203,7 +203,11 @@ func newReceivedPacket(msg tsderp.ReceivedMessage) (ReceivedPacket, error) {
 		return nil, fmt.Errorf("empty data in derp packet")
 	}
 
-	p := &receivedPacket{data: packet.Data}
-	copy(p.source[:], packet.Source.AppendTo([]byte{})[:])
+	data := make([]byte, len(packet.Data))
+	copy(data, packet.Data)
+	p := &receivedPacket{
+		data:   append([]byte(nil), packet.Data...),
+		source: wgdevice.NoisePublicKey(packet.Source.AppendTo([]byte(nil))),
+	}
 	return p, nil
 }

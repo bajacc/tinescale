@@ -21,6 +21,7 @@ services:
     environment:
       - IFACE=wg0
       - ADDR=10.0.0.1/24
+      - PING_ADDR=10.0.0.2
     networks:
       testnet:
         ipv4_address: 10.10.0.11
@@ -38,6 +39,7 @@ services:
     environment:
       - IFACE=wg0
       - ADDR=10.0.0.2/24
+      - PING_ADDR=10.0.0.1
     networks:
       testnet:
         ipv4_address: 10.10.0.12

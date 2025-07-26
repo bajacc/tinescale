@@ -81,7 +81,7 @@ func New(logger *wgdevice.Logger, tun PubKeyConn, epParser helper.EndpointParser
 func (e *endpointPool) ClearPeers() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.pool = map[wgdevice.NoisePublicKey]*peerEndpoints{}
+	e.pool = make(map[wgdevice.NoisePublicKey]*peerEndpoints)
 }
 
 // Close implements EndpointPool.
@@ -186,7 +186,6 @@ func (e *endpointPool) updateEndpointLoop(ctx context.Context) {
 			e.log.Verbosef("Stopping endpoint updates")
 			return
 		case <-ticker.C:
-			e.log.Verbosef("update endpoint ticker")
 			e.mu.RLock()
 			for key := range e.pool {
 				if err := e.requestEndpoints(key); err != nil {
@@ -276,8 +275,6 @@ func (e *endpointPool) processEndpointResponse(peerKey wgdevice.NoisePublicKey, 
 	peer.mu.Lock()
 	peer.msgEndpoints = newEndpoints
 	peer.mu.Unlock()
-
-	e.log.Verbosef("Updated %d endpoints for peer %x", len(newEndpoints), peerKey, response.Addresses)
 }
 
 // handleEndpointRequest processes incoming endpoint requests and sends a response
@@ -329,7 +326,6 @@ func (e *endpointPool) getStunEndpoints() []*Address {
 }
 
 func (e *endpointPool) getPrivateEndpoints() []*Address {
-
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return []*Address{}
@@ -361,7 +357,5 @@ func (e *endpointPool) getPrivateEndpoints() []*Address {
 			})
 		}
 	}
-
-	e.log.Verbosef("Discovered %d local endpoints", len(result))
 	return result
 }
