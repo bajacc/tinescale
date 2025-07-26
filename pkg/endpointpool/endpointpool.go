@@ -96,6 +96,9 @@ func (e *endpointPool) SetListenPort(listenPort uint16) {
 }
 
 func (e *endpointPool) SetUAPIEndpoint(key wgdevice.NoisePublicKey, ep conn.Endpoint) {
+	if ep == nil {
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -187,6 +190,7 @@ func (e *endpointPool) updateEndpointLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			e.mu.RLock()
+			e.log.Verbosef("send requestEndpoints")
 			for key := range e.pool {
 				if err := e.requestEndpoints(key); err != nil {
 					e.log.Verbosef("Error requesting endpoints from peer %x: %v", key[:8], err)
@@ -221,6 +225,7 @@ func (e *endpointPool) requestEndpoints(peerKey wgdevice.NoisePublicKey) error {
 func (e *endpointPool) handleIncomingPackets(ctx context.Context) {
 	inboundCh := e.tun.GetInboundPacketCh()
 
+	e.log.Verbosef("start handleIncomingPackets")
 	for {
 		select {
 		case <-ctx.Done():
@@ -237,6 +242,7 @@ func (e *endpointPool) handleIncomingPackets(ctx context.Context) {
 				e.log.Errorf("failed to unmarshal wrapper: %v", err)
 				continue
 			}
+			e.log.Verbosef("received endpoint message")
 
 			switch msg := wrapper.MessageType.(type) {
 			case *MessageWrapper_EndpointRequest:
@@ -273,6 +279,7 @@ func (e *endpointPool) processEndpointResponse(peerKey wgdevice.NoisePublicKey, 
 	}
 
 	peer.mu.Lock()
+	e.log.Verbosef("received new endpoint: %v", newEndpoints)
 	peer.msgEndpoints = newEndpoints
 	peer.mu.Unlock()
 }

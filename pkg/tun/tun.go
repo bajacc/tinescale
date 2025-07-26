@@ -87,10 +87,9 @@ func (t *InterceptTun) SetLocalKey(localKey wgdevice.NoisePublicKey) error {
 		return fmt.Errorf("cannot convert %s to ip", localKey)
 	}
 
-	delete(t.ipToKey, t.localIp)
 	t.localKey = localKey
 	t.localIp = localIp
-	t.ipToKey[t.localIp] = t.localKey
+	t.log.Verbosef("SetLocalKey %s %x", t.localIp, t.localKey)
 	return nil
 }
 
@@ -150,19 +149,20 @@ func (t *InterceptTun) Name() (string, error) {
 	return t.inner.Name()
 }
 
-func (t *InterceptTun) AddPeer(key wgdevice.NoisePublicKey) (*netip.Addr, error) {
-	ip, ok := helper.PublicKeyToIP(t.localNet, key)
+func (t *InterceptTun) AddPeer(key wgdevice.NoisePublicKey) error {
+	ip, ok := t.PublicKeyToIP(key)
 	if !ok {
-		return nil, fmt.Errorf("could not create ip from public key")
+		return fmt.Errorf("could not create ip from public key")
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	_, exists := t.ipToKey[ip]
 	if exists {
-		return nil, fmt.Errorf("peer already exists")
+		return fmt.Errorf("peer already exists")
 	}
 	t.ipToKey[ip] = key
-	return &ip, nil
+	t.log.Verbosef("AddPeer %s %x", t.localIp, t.localKey)
+	return nil
 }
 
 func (t *InterceptTun) PublicKeyToIP(key wgdevice.NoisePublicKey) (netip.Addr, bool) {
@@ -170,7 +170,7 @@ func (t *InterceptTun) PublicKeyToIP(key wgdevice.NoisePublicKey) (netip.Addr, b
 }
 
 func (t *InterceptTun) RemovePeer(key wgdevice.NoisePublicKey) error {
-	ip, ok := helper.PublicKeyToIP(t.localNet, key)
+	ip, ok := t.PublicKeyToIP(key)
 	if !ok {
 		return fmt.Errorf("could not create ip from public key")
 	}
@@ -187,11 +187,12 @@ func (t *InterceptTun) ClearPeers() {
 }
 
 func (t *InterceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool) {
-	srcIP, ok1 := helper.PublicKeyToIP(t.localNet, pkPkt.src)
-	dstIP, ok2 := helper.PublicKeyToIP(t.localNet, pkPkt.dst)
+	srcIP, ok1 := t.PublicKeyToIP(pkPkt.src)
+	dstIP, ok2 := t.PublicKeyToIP(pkPkt.dst)
 	if !ok1 || !ok2 {
 		return 0, false
 	}
+	t.log.Verbosef("successful send %d %s %s", len(ipPkt), srcIP, dstIP)
 	src := srcIP.AsSlice()
 	dst := dstIP.AsSlice()
 	if srcIP.Is4() {
@@ -248,18 +249,22 @@ func (t *InterceptTun) toPubKeyPacket(ipPkt []byte) (*PubKeyPacket, bool) {
 	if !ok1 || !ok2 {
 		return nil, false
 	}
+	t.log.Verbosef("successful recv %d %s %s %v", len(ipPkt)-headerLen, ipSrc, ipDst, t.ipToKey)
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	keySrc, ok1 := t.ipToKey[ipSrc]
-	keyDst, ok2 := t.ipToKey[ipDst]
-	if !ok1 || !ok2 {
+	if ipDst != t.localIp {
+		return nil, false
+	}
+	keySrc, ok := t.ipToKey[ipSrc]
+	if !ok {
 		return nil, false
 	}
 	pkPkt := &PubKeyPacket{
 		src:  keySrc,
-		dst:  keyDst,
+		dst:  t.localKey,
 		data: append([]byte(nil), ipPkt[headerLen:]...), // deep copy
 	}
+	t.log.Verbosef("successful recv 2 %d %s %s", len(ipPkt)-headerLen, ipSrc, ipDst)
 	return pkPkt, true
 }
 
@@ -300,6 +305,7 @@ func (t *InterceptTun) Read(bufs [][]byte, sizes []int, offset int) (int, error)
 
 			if n, ok := t.toIpPacket(bufs[0][offset:], packet); ok {
 				sizes[0] = n
+				t.log.Verbosef("successful send %d %x %x", len(packet.data), packet.src, packet.dst)
 				return 1, nil
 			}
 			continue // drop silently

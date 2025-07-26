@@ -153,6 +153,7 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 	endpoints := b.device.endpointPool.GetAllEndpoints(ep.origPubKey)
 
 	// else send via stun configured endpoints
+	b.log.Verbosef("try endpoints %v", endpoints)
 	for _, endpoint := range endpoints {
 		err = b.inner.Send(bufs, endpoint)
 		if err == nil {
@@ -162,6 +163,7 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 
 	// else send via DERP
 	b.device.derpPool.Send(bufs, ep.origPubKey)
+	b.log.Verbosef("sent via derp")
 
 	return err
 }
