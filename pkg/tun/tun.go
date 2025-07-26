@@ -165,6 +165,27 @@ func (t *InterceptTun) AddPeer(key wgdevice.NoisePublicKey) (*netip.Addr, error)
 	return &ip, nil
 }
 
+func (t *InterceptTun) PublicKeyToIP(key wgdevice.NoisePublicKey) (netip.Addr, bool) {
+	return helper.PublicKeyToIP(t.localNet, key)
+}
+
+func (t *InterceptTun) RemovePeer(key wgdevice.NoisePublicKey) error {
+	ip, ok := helper.PublicKeyToIP(t.localNet, key)
+	if !ok {
+		return fmt.Errorf("could not create ip from public key")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.ipToKey, ip)
+	return nil
+}
+
+func (t *InterceptTun) ClearPeers() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ipToKey = make(map[netip.Addr]wgdevice.NoisePublicKey)
+}
+
 func (t *InterceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool) {
 	srcIP, ok1 := helper.PublicKeyToIP(t.localNet, pkPkt.src)
 	dstIP, ok2 := helper.PublicKeyToIP(t.localNet, pkPkt.dst)

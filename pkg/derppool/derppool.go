@@ -198,6 +198,7 @@ func newReceivedPacket(msg tsderp.ReceivedMessage) (ReceivedPacket, error) {
 	if !ok {
 		return nil, nil // Skip invalid message types
 	}
+
 	if len(packet.Data) == 0 {
 		return nil, fmt.Errorf("empty data in derp packet")
 	}

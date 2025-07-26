@@ -30,18 +30,6 @@ func NewBind(inner conn.Bind, device *Device, logger *wgdevice.Logger) *Bind {
 	}
 }
 
-func (b *Bind) udpToTinescaleEndpoint(udpEp conn.Endpoint) *Endpoint {
-	// Look through all peers to find one with matching UDP endpoint
-	b.device.peers.RLock()
-	defer b.device.peers.RUnlock()
-
-	key, exists := b.device.endpointPool.FindKey(udpEp)
-	if !exists {
-		return nil
-	}
-	return &Endpoint{origPubKey: *key}
-}
-
 // ClearSrc implements conn.Endpoint.
 func (e *Endpoint) ClearSrc() {}
 
@@ -123,11 +111,11 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 			}
 
 			for i := range n {
-				tinescaleEp := b.udpToTinescaleEndpoint(eps[i])
-				if tinescaleEp == nil {
+				key, exists := b.device.endpointPool.FindKey(eps[i])
+				if !exists {
 					return n, fmt.Errorf("no tinescale endpoint found for %s", eps[i].DstToString())
 				}
-				eps[i] = tinescaleEp
+				eps[i] = &Endpoint{origPubKey: *key}
 			}
 			return n, nil
 		}
@@ -160,8 +148,6 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 	if !ok {
 		return fmt.Errorf("Error Enpoint is not a tinescale endpoint")
 	}
-	b.device.peers.RLock()
-	defer b.device.peers.RUnlock()
 
 	var err error
 	endpoints := b.device.endpointPool.GetAllEndpoints(ep.origPubKey)

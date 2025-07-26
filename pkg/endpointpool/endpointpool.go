@@ -18,7 +18,7 @@ import (
 )
 
 type EndpointPool interface {
-	Clear()
+	ClearPeers()
 	Close()
 
 	GetAllEndpoints(pubKey wgdevice.NoisePublicKey) []conn.Endpoint
@@ -29,6 +29,11 @@ type EndpointPool interface {
 	FindKey(ep conn.Endpoint) (*wgdevice.NoisePublicKey, bool)
 }
 
+type PubKeyConn interface {
+	GetInboundPacketCh() <-chan *tun.PubKeyPacket
+	SendPubKeyPacket(dst wgdevice.NoisePublicKey, data []byte)
+}
+
 type endpointPool struct {
 	log        *wgdevice.Logger
 	mu         sync.RWMutex
@@ -36,7 +41,7 @@ type endpointPool struct {
 	stunPool   stunPool.StunPool
 	listenPort uint16
 
-	tun            *tun.InterceptTun
+	tun            PubKeyConn
 	epParser       helper.EndpointParser
 	updateInterval time.Duration
 	requestTimeout time.Duration
@@ -51,7 +56,7 @@ type peerEndpoints struct {
 	uapiEndpoint conn.Endpoint
 }
 
-func New(logger *wgdevice.Logger, tun *tun.InterceptTun, epParser helper.EndpointParser, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
+func New(logger *wgdevice.Logger, tun PubKeyConn, epParser helper.EndpointParser, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &endpointPool{
@@ -73,8 +78,10 @@ func New(logger *wgdevice.Logger, tun *tun.InterceptTun, epParser helper.Endpoin
 }
 
 // Clear implements EndpointPool.
-func (e *endpointPool) Clear() {
-	panic("unimplemented")
+func (e *endpointPool) ClearPeers() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.pool = map[wgdevice.NoisePublicKey]*peerEndpoints{}
 }
 
 // Close implements EndpointPool.

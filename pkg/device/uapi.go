@@ -204,20 +204,17 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 		return
 	}
 
-	ir.device.peers.Lock()
-	defer ir.device.peers.Unlock()
 	if config.remove {
 		ir.log.Verbosef("UAPI(tinescale): removing peer with public key %s", config.publicKeyString)
-		delete(ir.device.peers.keyMap, config.publicKey)
+		ir.device.RemovePeer(config.publicKey)
 		return
 	}
 
 	if !config.updateOnly {
 		ir.log.Verbosef("UAPI(tinescale): creating peer with public key %s", config.publicKeyString)
-		ir.device.peers.keyMap[config.publicKey] = &Peer{}
-		ir.device.endpointPool.AddPeer(config.publicKey)
-		peerIp, err := ir.device.tun.AddPeer(config.publicKey)
-		if err != nil {
+		ir.device.AddPeer(config.publicKey)
+		peerIp, ok := ir.device.tun.PublicKeyToIP(config.publicKey)
+		if !ok {
 			return
 		}
 		allowedipLine = fmt.Sprintf("allowed_ip=%s/%d\n", peerIp, peerIp.BitLen())
@@ -229,14 +226,6 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 	}
 
 	ir.device.endpointPool.SetUAPIEndpoint(config.publicKey, config.endpoint)
-	peer := ir.device.peers.keyMap[config.publicKey]
-
-	func() {
-		peer.endpoint.Lock()
-		defer peer.endpoint.Unlock()
-		peer.endpoint.uapi = config.endpoint
-	}()
-
 	ir.bufferedBytes = append(ir.bufferedBytes, endpointLine...)
 	ir.bufferedBytes = append(ir.bufferedBytes, allowedipLine...)
 
@@ -431,9 +420,6 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 		}
 		ir.log.Verbosef("UAPI(tinescale): Updating listen port to %d", port)
 		ir.device.endpointPool.SetListenPort(uint16(port))
-		ir.device.listenPort.Lock()
-		defer ir.device.listenPort.Unlock()
-		ir.device.listenPort.val = uint16(port)
 		return ir.bufferBytesAndRead(p)
 	case "replace_peers":
 		if value != "true" {
@@ -441,9 +427,7 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 			return 0, ir.ipcErr
 		}
 		ir.log.Verbosef("UAPI(tinescale): replace peers")
-		ir.device.peers.Lock()
-		defer ir.device.peers.Unlock()
-		ir.device.peers.keyMap = make(map[wgdevice.NoisePublicKey]*Peer)
+		ir.device.ClearPeers()
 		return ir.bufferBytesAndRead(p)
 	default:
 		ir.log.Verbosef("UAPI(tinescale): other command '%s=%s'", key, value)

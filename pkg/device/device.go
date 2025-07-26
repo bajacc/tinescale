@@ -46,24 +46,21 @@ type Device struct {
 		privateKey wgdevice.NoisePrivateKey
 		publicKey  wgdevice.NoisePublicKey
 	}
-
-	peers struct {
-		sync.RWMutex // protects keyMap
-		keyMap       map[wgdevice.NoisePublicKey]*Peer
-	}
-
-	listenPort struct {
-		sync.RWMutex
-		val uint16
-	}
 }
 
-type Peer struct {
-	endpoint struct {
-		sync.RWMutex
-		uapi conn.Endpoint   // uapi configured endpoint
-		stun []conn.Endpoint // stun configured endpoints
-	}
+func (d *Device) AddPeer(key wgdevice.NoisePublicKey) {
+	d.tun.AddPeer(key)
+	d.endpointPool.AddPeer(key)
+}
+
+func (d *Device) RemovePeer(key wgdevice.NoisePublicKey) {
+	d.endpointPool.RemovePeer(key)
+	d.tun.RemovePeer(key)
+}
+
+func (d *Device) ClearPeers() {
+	d.endpointPool.ClearPeers()
+	d.tun.ClearPeers()
 }
 
 func (device *Device) Wait() chan struct{} {
