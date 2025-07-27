@@ -81,11 +81,7 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 
 	func() {
 		for addr, state := range device.stunPool.GetAllResults() {
-			if state.Err != nil {
-				sendf("stun_server=%s err=%v", addr, state.Err)
-			} else {
-				sendf("stun_server=%s state=%s:%d timestamp=", addr, state.PublicIP, state.PublicPort, state.Timestamp)
-			}
+			sendf("stun_server=%s state=%s:%d timestamp=", addr, state.PublicIP, state.PublicPort, state.Timestamp)
 		}
 		for _, addr := range device.derpPool.GetAddresses() {
 			sendf("derp_server=%s", addr)

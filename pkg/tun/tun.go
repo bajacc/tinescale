@@ -249,11 +249,10 @@ func (t *InterceptTun) toPubKeyPacket(ipPkt []byte) (*PubKeyPacket, bool) {
 	if !ok1 || !ok2 {
 		return nil, false
 	}
-	t.log.Verbosef("successful recv %d %s %s %v", len(ipPkt)-headerLen, ipSrc, ipDst, t.ipToKey)
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if ipDst != t.localIp {
-		return nil, false
+		return nil, false // only accept packet that have a local dst IP
 	}
 	keySrc, ok := t.ipToKey[ipSrc]
 	if !ok {
@@ -264,7 +263,6 @@ func (t *InterceptTun) toPubKeyPacket(ipPkt []byte) (*PubKeyPacket, bool) {
 		dst:  t.localKey,
 		data: append([]byte(nil), ipPkt[headerLen:]...), // deep copy
 	}
-	t.log.Verbosef("successful recv 2 %d %s %s", len(ipPkt)-headerLen, ipSrc, ipDst)
 	return pkPkt, true
 }
 

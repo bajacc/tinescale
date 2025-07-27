@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-IPC_FILE="/app/config.ipc"
+ROUTE="${ROUTE:-}"
 
 # Fail if either is empty
 if [[ -z "$IFACE" ]]; then
@@ -37,5 +37,9 @@ printf "get=1\n\n" | socat - UNIX-CONNECT:"$SOCKET_PATH"
 echo "[INFO] Assigning $ADDR to $IFACE"
 ip addr add "$ADDR" dev "$IFACE"
 ip link set up dev "$IFACE"
+
+if [[ -n "$ROUTE" ]]; then
+    ip route add $ROUTE
+fi
 
 ping "$PING_ADDR"

@@ -136,7 +136,7 @@ func (e *endpointPool) FindKey(ep conn.Endpoint) (*wgdevice.NoisePublicKey, bool
 
 	for key, peer := range e.pool {
 		peer.mu.RLock()
-		if peer.uapiEndpoint.DstToString() == ep.DstToString() {
+		if peer.uapiEndpoint != nil && peer.uapiEndpoint.DstToString() == ep.DstToString() {
 			peer.mu.RUnlock()
 			return &key, true
 		}
@@ -289,6 +289,7 @@ func (e *endpointPool) handleEndpointRequest(peerKey wgdevice.NoisePublicKey, re
 	e.log.Verbosef("Received endpoint request from peer %x", peerKey)
 
 	localEndpoints := e.getLocalEndpoints()
+	e.log.Verbosef("local endpoints to be sent %v", localEndpoints)
 	response := &EndpointResponse{
 		RequestId: request.RequestId,
 		Addresses: localEndpoints,
@@ -307,62 +308,21 @@ func (e *endpointPool) handleEndpointRequest(peerKey wgdevice.NoisePublicKey, re
 	e.tun.SendPubKeyPacket(peerKey, data)
 }
 
-func (e *endpointPool) getLocalEndpoints() []*Address {
-	var result []*Address
-	result = append(result, e.getPrivateEndpoints()...)
-	result = append(result, e.getStunEndpoints()...)
-	return result
-}
-
 // getLocalEndpoints returns the local endpoints that can be shared with peers
-func (e *endpointPool) getStunEndpoints() []*Address {
+func (e *endpointPool) getLocalEndpoints() []*Address {
 	var result []*Address
 
 	// Get STUN-discovered public endpoints
 	stunResults := e.stunPool.GetAllResults()
 	for _, stunResult := range stunResults {
-		if stunResult.Err != nil {
-			continue
-		}
 		result = append(result, &Address{
 			Ip:   stunResult.PublicIP,
 			Port: uint32(stunResult.PublicPort),
 		})
-	}
-	return result
-}
-
-func (e *endpointPool) getPrivateEndpoints() []*Address {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return []*Address{}
-	}
-	var ifaceAddr []net.Addr
-	for _, iface := range interfaces {
-		// Skip loopback and down interfaces
-		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
-			continue
-		}
-
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		ifaceAddr = append(ifaceAddr, addrs...)
-	}
-
-	var result []*Address
-	for _, addr := range ifaceAddr {
-		ipNet, ok := addr.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		if !ipNet.IP.IsLoopback() && (ipNet.IP.IsGlobalUnicast() || ipNet.IP.IsPrivate()) {
-			result = append(result, &Address{
-				Ip:   ipNet.IP,
-				Port: uint32(e.listenPort),
-			})
-		}
+		result = append(result, &Address{
+			Ip:   stunResult.LocalIP,
+			Port: uint32(e.listenPort),
+		})
 	}
 	return result
 }

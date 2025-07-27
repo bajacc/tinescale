@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wireguard-tools \
     dnsutils \
     net-tools \
+    netcat \
  && apt-get clean
 
 # Copy go.mod first for better caching

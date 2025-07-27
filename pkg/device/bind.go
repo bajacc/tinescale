@@ -156,6 +156,7 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 	b.log.Verbosef("try endpoints %v", endpoints)
 	for _, endpoint := range endpoints {
 		err = b.inner.Send(bufs, endpoint)
+		b.log.Verbosef("try send endpoint %v %v", endpoint, err)
 		if err == nil {
 			return nil
 		}

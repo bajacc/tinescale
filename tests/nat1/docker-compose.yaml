@@ -6,10 +6,26 @@ services:
       - DERP_DOMAIN=10.10.0.10
       - DERP_ADDR=:8080
       - DERP_STUN=true
-      - DERP_STUN_PORT=3478
     networks:
       testnet:
         ipv4_address: 10.10.0.10
+
+  nat:
+    container_name: nat
+    image: alpine:latest
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    command: >
+      sh -c "apk add --no-cache iptables &&
+             iptables -t nat -A POSTROUTING -s 10.10.1.0/24 -d 10.10.0.0/24 -j MASQUERADE &&
+             tail -f /dev/null"
+    networks:
+      testnet:
+        ipv4_address: 10.10.0.9
+      natnet:
+        ipv4_address: 10.10.1.9
 
   peer1:
     container_name: peer1
@@ -22,11 +38,15 @@ services:
     environment:
       - IFACE=wg0
       - ADDR=10.0.0.1/24
+      - PING_ADDR=10.0.0.2
+      - "ROUTE=10.10.0.0/24 via 10.10.1.9"
     networks:
-      testnet:
-        ipv4_address: 10.10.0.11
+      natnet:
+        ipv4_address: 10.10.1.11
     volumes:
       - ./peer1.ipc:/app/config.ipc
+    depends_on:
+      - nat
 
   peer2:
     container_name: peer2
@@ -39,6 +59,7 @@ services:
     environment:
       - IFACE=wg0
       - ADDR=10.0.0.2/24
+      - PING_ADDR=10.0.0.1
     networks:
       testnet:
         ipv4_address: 10.10.0.12
@@ -47,8 +68,14 @@ services:
 
 networks:
   testnet:
-    name: same-net-1-testnet
+    name: nat1-testnet
     driver: bridge
     ipam:
       config:
         - subnet: 10.10.0.0/24
+  natnet:
+    name: nat1-natnet
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.1.0/24

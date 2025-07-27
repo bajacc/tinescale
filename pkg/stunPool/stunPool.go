@@ -2,6 +2,7 @@ package stunPool
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"net"
 	"sync"
@@ -12,16 +13,16 @@ import (
 )
 
 type StunResult struct {
+	LocalIP    net.IP
 	PublicIP   net.IP
 	PublicPort int
-	Err        error
 	Timestamp  time.Time
 }
 
 type StunPool interface {
 	AddServer(addr string) error
 	RemoveServer(addr string)
-	GetAllResults() map[string]StunResult
+	GetAllResults() map[string]*StunResult
 	GetAddresses() []string
 	Clear()
 	Close()
@@ -34,7 +35,7 @@ type stunPool struct {
 
 	mu      sync.RWMutex
 	servers map[string]*serverState
-	results map[string]StunResult
+	results map[string]*StunResult
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -53,7 +54,7 @@ func New(refreshInterval time.Duration, timeout time.Duration, logger *wgdevice.
 		refreshTime: refreshInterval,
 		timeout:     timeout,
 		servers:     make(map[string]*serverState),
-		results:     make(map[string]StunResult),
+		results:     make(map[string]*StunResult),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
@@ -101,7 +102,7 @@ func (s *stunPool) GetAddresses() []string {
 	return addrs
 }
 
-func (s *stunPool) GetAllResults() map[string]StunResult {
+func (s *stunPool) GetAllResults() map[string]*StunResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -119,7 +120,7 @@ func (s *stunPool) Clear() {
 	s.wg.Wait()
 
 	s.servers = make(map[string]*serverState)
-	s.results = make(map[string]StunResult)
+	s.results = make(map[string]*StunResult)
 }
 
 func (s *stunPool) Close() {
@@ -138,52 +139,83 @@ func (s *stunPool) queryLoop(ctx context.Context, addr string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			ip, port, err := s.querySTUN(ctx, addr)
-
-			s.mu.Lock()
-			s.results[addr] = StunResult{
-				PublicIP:   ip,
-				PublicPort: port,
-				Err:        err,
-				Timestamp:  time.Now(),
-			}
-			s.mu.Unlock()
+			s.log.Verbosef("STUN Query %s", addr)
+			r, err := s.querySTUN(ctx, addr)
 
 			if err != nil {
 				s.log.Errorf("STUN query failed for %s: %v", addr, err)
+				continue
 			} else {
-				s.log.Verbosef("STUN query successful for %s: %s:%d", addr, ip, port)
+				s.log.Verbosef("STUN query successful for %s %v", addr, r)
 			}
+
+			s.mu.Lock()
+			s.results[addr] = r
+			s.mu.Unlock()
+
 		}
 	}
 }
 
-func (s *stunPool) querySTUN(ctx context.Context, serverAddr string) (net.IP, int, error) {
+func (s *stunPool) querySTUN(ctx context.Context, serverAddr string) (*StunResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "udp", serverAddr)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer conn.Close()
 
+	localUDPAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return nil, fmt.Errorf("expected UDPAddr, got %T", conn.LocalAddr())
+	}
+	localIP := localUDPAddr.IP
+
 	c, err := stun.NewClient(conn)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer c.Close()
 
-	var xorAddr stun.XORMappedAddress
+	var ip net.IP
+	var port int
 
 	message := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
-	err = c.Do(message, func(res stun.Event) {
+	var errRes error
+	errDo := c.Do(message, func(res stun.Event) {
 		if res.Error != nil {
-			err = res.Error
+			errRes = res.Error
 			return
 		}
-		err = xorAddr.GetFrom(res.Message)
+		var xorAddr stun.XORMappedAddress
+		if err = xorAddr.GetFrom(res.Message); err == nil {
+			ip = xorAddr.IP
+			port = xorAddr.Port
+			return
+		}
+		s.log.Verbosef("XORMappedAddress not found: %v", err)
+
+		var mappedAddr stun.MappedAddress
+		if err = mappedAddr.GetFrom(res.Message); err == nil {
+			ip = mappedAddr.IP
+			port = mappedAddr.Port
+			return
+		}
+		s.log.Verbosef("MappedAddress also not found: %v", err)
 	})
-	return xorAddr.IP, xorAddr.Port, err
+	if errDo != nil {
+		return nil, errDo
+	}
+	if errRes != nil {
+		return nil, errRes
+	}
+	return &StunResult{
+		PublicIP:   ip,
+		PublicPort: port,
+		LocalIP:    localIP,
+		Timestamp:  time.Now(),
+	}, nil
 }
