@@ -41,7 +41,7 @@ type endpointPool struct {
 	stunPool   stunPool.StunPool
 	listenPort uint16
 
-	tun            PubKeyConn
+	conn           PubKeyConn
 	epParser       helper.EndpointParser
 	updateInterval time.Duration
 	requestTimeout time.Duration
@@ -56,14 +56,14 @@ type peerEndpoints struct {
 	uapiEndpoint conn.Endpoint
 }
 
-func New(logger *wgdevice.Logger, tun PubKeyConn, epParser helper.EndpointParser, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
+func New(logger *wgdevice.Logger, conn PubKeyConn, epParser helper.EndpointParser, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &endpointPool{
 		log:            logger,
 		pool:           make(map[wgdevice.NoisePublicKey]*peerEndpoints),
 		stunPool:       stunPool,
-		tun:            tun,
+		conn:           conn,
 		epParser:       epParser,
 		updateInterval: updateInterval,
 		requestTimeout: 5 * time.Second,
@@ -217,13 +217,12 @@ func (e *endpointPool) requestEndpoints(peerKey wgdevice.NoisePublicKey) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	e.tun.SendPubKeyPacket(peerKey, data)
+	e.conn.SendPubKeyPacket(peerKey, data)
 	return nil
 }
 
 // handleIncomingPackets processes incoming endpoint requests and responses from peers
 func (e *endpointPool) handleIncomingPackets(ctx context.Context) {
-	inboundCh := e.tun.GetInboundPacketCh()
 
 	e.log.Verbosef("start handleIncomingPackets")
 	for {
@@ -231,7 +230,7 @@ func (e *endpointPool) handleIncomingPackets(ctx context.Context) {
 		case <-ctx.Done():
 			e.log.Verbosef("endpointPool context canceled")
 			return
-		case packet, ok := <-inboundCh:
+		case packet, ok := <-e.conn.GetInboundPacketCh():
 			if !ok {
 				e.log.Verbosef("endpointPool: inboundCh channel closed")
 				return
@@ -305,7 +304,7 @@ func (e *endpointPool) handleEndpointRequest(peerKey wgdevice.NoisePublicKey, re
 		return
 	}
 
-	e.tun.SendPubKeyPacket(peerKey, data)
+	e.conn.SendPubKeyPacket(peerKey, data)
 }
 
 // getLocalEndpoints returns the local endpoints that can be shared with peers
