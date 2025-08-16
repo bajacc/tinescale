@@ -138,7 +138,25 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 			return 1, nil
 		}
 	}
-	fns = append(fns, derpFn)
+
+	wgRelayFn := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+		select {
+		case <-ctx.Done():
+			return 0, net.ErrClosed
+		case msg, ok := <-b.device.relay.ReceiveChannel():
+			if !ok {
+				return 0, fmt.Errorf("relay pool channel closed")
+			}
+			n := copy(bufs[0][:], msg.Data())
+			sizes[0] = n
+			eps[0] = &Endpoint{
+				origPubKey: msg.Source(),
+			}
+			return 1, nil
+		}
+	}
+
+	fns = append(fns, derpFn, wgRelayFn)
 
 	return fns, actualPort, err
 }
@@ -163,8 +181,14 @@ func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
 	}
 
 	// else send via DERP
-	b.device.derpPool.Send(bufs, ep.origPubKey)
-	b.log.Verbosef("sent via derp")
+	if err := b.device.derpPool.Send(bufs, ep.origPubKey); err == nil {
+		b.log.Verbosef("sent via derp")
+		return nil
+	}
+
+	// else send via relay
+	b.device.relay.Send(bufs, ep.origPubKey)
+	b.log.Verbosef("sent via wg relay")
 
 	return err
 }

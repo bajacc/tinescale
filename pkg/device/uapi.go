@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/bajacc/tinescale/pkg/helper"
+	"github.com/bajacc/tinescale/pkg/relay"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/ipc"
@@ -58,12 +59,20 @@ type InterceptReader struct {
 	ipcErr        *IPCError
 }
 
+var stringToRelayMode = map[string]relay.RelayMode{
+	"off":     relay.RelayOff,
+	"ingress": relay.RelayIngress,
+	"egress":  relay.RelayEgress,
+	"on":      relay.RelayOn,
+}
+
 type PeerConfig struct {
 	publicKey       wgdevice.NoisePublicKey
 	publicKeyString string
 	ignore          bool
 	updateOnly      bool
 	remove          bool
+	relayMode       relay.RelayMode
 	endpoint        conn.Endpoint
 }
 
@@ -86,6 +95,10 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 		for _, addr := range device.derpPool.GetAddresses() {
 			sendf("derp_server=%s", addr)
 		}
+		for _, relay := range device.relay.GetAllRelay() {
+			sendf("relay=%s", relay)
+		}
+		sendf("is_wg_relay=%v", device.relay.IsWgRelay())
 	}()
 
 	// send lines (does not require resource locks)
@@ -221,6 +234,7 @@ func (ir *InterceptReader) SetPeerFromConfig() {
 		ir.log.Verbosef("UAPI(tinescale): send endpoint line %s", endpointLine)
 	}
 
+	ir.device.relay.SetPeerRelayMode(config.publicKey, config.relayMode)
 	ir.device.endpointPool.SetUAPIEndpoint(config.publicKey, config.endpoint)
 	ir.bufferedBytes = append(ir.bufferedBytes, endpointLine...)
 	ir.bufferedBytes = append(ir.bufferedBytes, allowedipLine...)
@@ -344,6 +358,15 @@ func (ir *InterceptReader) readPeerLine(key, value string, p []byte) (int, error
 		ir.peerConfig.endpoint = ep
 		// do not propagate endpoint to wireguard device yet
 		return 0, nil
+	case "relay_mode":
+		ir.log.Verbosef("UAPI(tinescale): Registering relay mode")
+		mode, ok := stringToRelayMode[value]
+		if !ok {
+			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to parse relay mode: %s", value)
+			return 0, ir.ipcErr
+		}
+		ir.peerConfig.relayMode = mode
+		return 0, nil
 	default:
 		ir.log.Verbosef("UAPI(tinescale): peer command '%s=%s'", key, value)
 		return ir.bufferBytesAndRead(p)
@@ -354,6 +377,14 @@ func (ir *InterceptReader) readDeviceLine(key, value string, p []byte) (int, err
 	switch key {
 	case "public_key":
 		return ir.readPublicKey(value, p)
+	case "is_wg_relay":
+		if value != "true" && value != "false" {
+			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to set is_wg_relay, invalid value: %v", value)
+			return 0, ir.ipcErr
+		}
+		ir.log.Verbosef("UAPI(tinescale): Setting is_wg_relay to %v", value)
+		ir.device.relay.SetWgRelay(value == "true")
+		return ir.bufferBytesAndRead(p)
 	case "replace_stun_servers":
 		if value != "true" {
 			ir.ipcErr = ipcErrorf(ipc.IpcErrorInvalid, "failed to replace stun_server, invalid value: %v", value)

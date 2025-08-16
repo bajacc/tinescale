@@ -1,4 +1,3 @@
-//go:generate protoc --go_out=paths=source_relative:. endpointpool.proto
 package endpointpool
 
 import (
@@ -14,7 +13,6 @@ import (
 	"github.com/bajacc/tinescale/pkg/tun"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
-	"google.golang.org/protobuf/proto"
 )
 
 type EndpointPool interface {
@@ -29,11 +27,6 @@ type EndpointPool interface {
 	FindKey(ep conn.Endpoint) (*wgdevice.NoisePublicKey, bool)
 }
 
-type PubKeyConn interface {
-	GetInboundPacketCh() <-chan *tun.PubKeyPacket
-	SendPubKeyPacket(dst wgdevice.NoisePublicKey, data []byte)
-}
-
 type endpointPool struct {
 	log        *wgdevice.Logger
 	mu         sync.RWMutex
@@ -41,7 +34,7 @@ type endpointPool struct {
 	stunPool   stunPool.StunPool
 	listenPort uint16
 
-	conn           PubKeyConn
+	conn           tun.PubKeyConn
 	epParser       helper.EndpointParser
 	updateInterval time.Duration
 	requestTimeout time.Duration
@@ -56,7 +49,7 @@ type peerEndpoints struct {
 	uapiEndpoint conn.Endpoint
 }
 
-func New(logger *wgdevice.Logger, conn PubKeyConn, epParser helper.EndpointParser, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
+func New(logger *wgdevice.Logger, conn tun.PubKeyConn, epParser helper.EndpointParser, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &endpointPool{
@@ -71,8 +64,15 @@ func New(logger *wgdevice.Logger, conn PubKeyConn, epParser helper.EndpointParse
 		cancel:         cancel,
 	}
 
+	conn.SetEndpointRequestHandler(func(src, dst wgdevice.NoisePublicKey, msg *tun.EndpointRequest) error {
+		return e.handleEndpointRequest(src, msg)
+	})
+
+	conn.SetEndpointResponseHandler(func(src, dst wgdevice.NoisePublicKey, msg *tun.EndpointResponse) error {
+		return e.handleEndpointResponse(src, msg)
+	})
+
 	go e.updateEndpointLoop(ctx)
-	go e.handleIncomingPackets(ctx)
 
 	return e
 }
@@ -192,7 +192,10 @@ func (e *endpointPool) updateEndpointLoop(ctx context.Context) {
 			e.mu.RLock()
 			e.log.Verbosef("send requestEndpoints")
 			for key := range e.pool {
-				if err := e.requestEndpoints(key); err != nil {
+				request := &tun.EndpointRequest{
+					RequestId: rand.Uint32(),
+				}
+				if err := e.conn.SendEndpointRequest(key, request); err != nil {
 					e.log.Verbosef("Error requesting endpoints from peer %x: %v", key[:8], err)
 				}
 			}
@@ -201,69 +204,15 @@ func (e *endpointPool) updateEndpointLoop(ctx context.Context) {
 	}
 }
 
-// requestEndpoints sends a request for endpoints to a peer
-func (e *endpointPool) requestEndpoints(peerKey wgdevice.NoisePublicKey) error {
-	request := &EndpointRequest{
-		RequestId: rand.Uint32(),
-	}
-	wrapper := &MessageWrapper{
-		MessageType: &MessageWrapper_EndpointRequest{
-			EndpointRequest: request,
-		},
-	}
-
-	data, err := proto.Marshal(wrapper)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	e.conn.SendPubKeyPacket(peerKey, data)
-	return nil
-}
-
-// handleIncomingPackets processes incoming endpoint requests and responses from peers
-func (e *endpointPool) handleIncomingPackets(ctx context.Context) {
-
-	e.log.Verbosef("start handleIncomingPackets")
-	for {
-		select {
-		case <-ctx.Done():
-			e.log.Verbosef("endpointPool context canceled")
-			return
-		case packet, ok := <-e.conn.GetInboundPacketCh():
-			if !ok {
-				e.log.Verbosef("endpointPool: inboundCh channel closed")
-				return
-			}
-
-			wrapper := &MessageWrapper{}
-			if err := proto.Unmarshal(packet.Data(), wrapper); err != nil {
-				e.log.Errorf("failed to unmarshal wrapper: %v", err)
-				continue
-			}
-			e.log.Verbosef("received endpoint message")
-
-			switch msg := wrapper.MessageType.(type) {
-			case *MessageWrapper_EndpointRequest:
-				e.handleEndpointRequest(packet.Src(), msg.EndpointRequest)
-			case *MessageWrapper_EndpointResponse:
-				e.processEndpointResponse(packet.Src(), msg.EndpointResponse)
-			default:
-				e.log.Verbosef("Failed to unmarshal packet from peer %x as request or response", packet.Src())
-			}
-		}
-	}
-}
-
 // processEndpointResponse processes an endpoint response and updates the peer's endpoints
-func (e *endpointPool) processEndpointResponse(peerKey wgdevice.NoisePublicKey, response *EndpointResponse) {
+func (e *endpointPool) handleEndpointResponse(peerKey wgdevice.NoisePublicKey, response *tun.EndpointResponse) error {
 	e.mu.RLock()
 	peer, exists := e.pool[peerKey]
 	e.mu.RUnlock()
 
 	if !exists {
 		e.log.Verbosef("Received response for unknown peer %x", peerKey[:8])
-		return
+		return nil
 	}
 
 	var newEndpoints []conn.Endpoint
@@ -281,44 +230,35 @@ func (e *endpointPool) processEndpointResponse(peerKey wgdevice.NoisePublicKey, 
 	e.log.Verbosef("received new endpoint: %v", newEndpoints)
 	peer.msgEndpoints = newEndpoints
 	peer.mu.Unlock()
+	return nil
 }
 
 // handleEndpointRequest processes incoming endpoint requests and sends a response
-func (e *endpointPool) handleEndpointRequest(peerKey wgdevice.NoisePublicKey, request *EndpointRequest) {
+func (e *endpointPool) handleEndpointRequest(peerKey wgdevice.NoisePublicKey, request *tun.EndpointRequest) error {
 	e.log.Verbosef("Received endpoint request from peer %x", peerKey)
 
 	localEndpoints := e.getLocalEndpoints()
 	e.log.Verbosef("local endpoints to be sent %v", localEndpoints)
-	response := &EndpointResponse{
+	response := &tun.EndpointResponse{
 		RequestId: request.RequestId,
 		Addresses: localEndpoints,
 	}
-	wrapper := &MessageWrapper{
-		MessageType: &MessageWrapper_EndpointResponse{
-			EndpointResponse: response,
-		},
-	}
-	data, err := proto.Marshal(wrapper)
-	if err != nil {
-		e.log.Errorf("Failed to marshal endpoint response: %v", err)
-		return
-	}
 
-	e.conn.SendPubKeyPacket(peerKey, data)
+	return e.conn.SendEndpointResponse(peerKey, response)
 }
 
 // getLocalEndpoints returns the local endpoints that can be shared with peers
-func (e *endpointPool) getLocalEndpoints() []*Address {
-	var result []*Address
+func (e *endpointPool) getLocalEndpoints() []*tun.Address {
+	var result []*tun.Address
 
 	// Get STUN-discovered public endpoints
 	stunResults := e.stunPool.GetAllResults()
 	for _, stunResult := range stunResults {
-		result = append(result, &Address{
+		result = append(result, &tun.Address{
 			Ip:   stunResult.PublicIP,
 			Port: uint32(stunResult.PublicPort),
 		})
-		result = append(result, &Address{
+		result = append(result, &tun.Address{
 			Ip:   stunResult.LocalIP,
 			Port: uint32(e.listenPort),
 		})

@@ -1,3 +1,4 @@
+//go:generate protoc --go_out=paths=source_relative:. tun.proto
 package tun
 
 import (
@@ -13,7 +14,26 @@ import (
 	"golang.org/x/net/ipv6"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
+	"google.golang.org/protobuf/proto"
 )
+
+type EndpointRequestHandler func(src wgdevice.NoisePublicKey, dst wgdevice.NoisePublicKey, msg *EndpointRequest) error
+type EndpointResponseHandler func(src wgdevice.NoisePublicKey, dst wgdevice.NoisePublicKey, msg *EndpointResponse) error
+type ToRelayMessageHandler func(src wgdevice.NoisePublicKey, dst wgdevice.NoisePublicKey, msg *ToRelayMessage) error
+type FromRelayMessageHandler func(src wgdevice.NoisePublicKey, dst wgdevice.NoisePublicKey, msg *FromRelayMessage) error
+
+type PubKeyConn interface {
+	SetEndpointRequestHandler(handler EndpointRequestHandler)
+	SetEndpointResponseHandler(handler EndpointResponseHandler)
+	SetToRelayMessageHandler(handler ToRelayMessageHandler)
+	SetFromRelayMessageHandler(handler FromRelayMessageHandler)
+
+	SendEndpointResponse(dst wgdevice.NoisePublicKey, msg *EndpointResponse) error
+	SendEndpointRequest(dst wgdevice.NoisePublicKey, msg *EndpointRequest) error
+	SendToRelayMessage(dst wgdevice.NoisePublicKey, msg *ToRelayMessage) error
+	SendFromRelayMessage(dst wgdevice.NoisePublicKey, msg *FromRelayMessage) error
+	LocalKey() wgdevice.NoisePublicKey
+}
 
 type InterceptTun struct {
 	inner tun.Device
@@ -26,9 +46,13 @@ type InterceptTun struct {
 	mu      sync.RWMutex
 	ipToKey map[netip.Addr]wgdevice.NoisePublicKey
 
+	endpointRequestHandler  EndpointRequestHandler
+	endpointResponseHandler EndpointResponseHandler
+	toRelayMessageHandler   ToRelayMessageHandler
+	fromRelayMessageHandler FromRelayMessageHandler
+
 	readCh     chan *readResult
 	outboundCh chan *PubKeyPacket
-	inboundCh  chan *PubKeyPacket
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -69,7 +93,6 @@ func New(logger *wgdevice.Logger, tun tun.Device) *InterceptTun {
 		ipToKey:    make(map[netip.Addr]wgdevice.NoisePublicKey),
 		readCh:     make(chan *readResult),
 		outboundCh: make(chan *PubKeyPacket, 1024),
-		inboundCh:  make(chan *PubKeyPacket, 1024),
 		ctx:        ctx,
 		cancel:     cancel,
 	}
@@ -91,6 +114,10 @@ func (t *InterceptTun) SetLocalKey(localKey wgdevice.NoisePublicKey) error {
 	t.localIp = localIp
 	t.log.Verbosef("SetLocalKey %s %x", t.localIp, t.localKey)
 	return nil
+}
+
+func (t *InterceptTun) LocalKey() wgdevice.NoisePublicKey {
+	return t.localKey
 }
 
 func (t *InterceptTun) SetLocaNet(localNet netip.Prefix) error {
@@ -116,6 +143,30 @@ func (t *InterceptTun) SetLocaNet(localNet netip.Prefix) error {
 	return nil
 }
 
+func (t *InterceptTun) SetEndpointRequestHandler(handler EndpointRequestHandler) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.endpointRequestHandler = handler
+}
+
+func (t *InterceptTun) SetEndpointResponseHandler(handler EndpointResponseHandler) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.endpointResponseHandler = handler
+}
+
+func (t *InterceptTun) SetToRelayMessageHandler(handler ToRelayMessageHandler) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.toRelayMessageHandler = handler
+}
+
+func (t *InterceptTun) SetFromRelayMessageHandler(handler FromRelayMessageHandler) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.fromRelayMessageHandler = handler
+}
+
 // BatchSize implements tun.Device.
 func (t *InterceptTun) BatchSize() int {
 	return t.inner.BatchSize()
@@ -124,7 +175,6 @@ func (t *InterceptTun) BatchSize() int {
 // Close implements tun.Device.
 func (t *InterceptTun) Close() error {
 	t.cancel()
-	close(t.inboundCh)
 	close(t.outboundCh)
 	return t.inner.Close()
 }
@@ -197,7 +247,7 @@ func (t *InterceptTun) toIpPacket(ipPkt []byte, pkPkt *PubKeyPacket) (int, bool)
 	dst := dstIP.AsSlice()
 	if srcIP.Is4() {
 		pktLen := len(pkPkt.data) + ipv4.HeaderLen
-		ipPkt[0] = 0x40
+		ipPkt[0] = 0x45
 		ipPkt[wgdevice.IPv4offsetTotalLength] = byte(pktLen >> 8)
 		ipPkt[wgdevice.IPv4offsetTotalLength+1] = byte(pktLen & 0xFF)
 		copy(ipPkt[wgdevice.IPv4offsetDst:wgdevice.IPv4offsetDst+net.IPv4len], dst)
@@ -266,16 +316,49 @@ func (t *InterceptTun) toPubKeyPacket(ipPkt []byte) (*PubKeyPacket, bool) {
 	return pkPkt, true
 }
 
-func (t *InterceptTun) GetInboundPacketCh() <-chan *PubKeyPacket {
-	return t.inboundCh
-}
-
-func (t *InterceptTun) SendPubKeyPacket(dst wgdevice.NoisePublicKey, data []byte) {
+func (t *InterceptTun) sendMessageWrapper(dst wgdevice.NoisePublicKey, msg *MessageWrapper) error {
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
 	t.outboundCh <- &PubKeyPacket{
 		src:  t.localKey,
 		dst:  dst,
 		data: data,
 	}
+	return nil
+}
+
+func (t *InterceptTun) SendEndpointResponse(dst wgdevice.NoisePublicKey, msg *EndpointResponse) error {
+	return t.sendMessageWrapper(dst, &MessageWrapper{
+		MessageType: &MessageWrapper_EndpointResponse{
+			EndpointResponse: msg,
+		},
+	})
+}
+
+func (t *InterceptTun) SendEndpointRequest(dst wgdevice.NoisePublicKey, msg *EndpointRequest) error {
+	return t.sendMessageWrapper(dst, &MessageWrapper{
+		MessageType: &MessageWrapper_EndpointRequest{
+			EndpointRequest: msg,
+		},
+	})
+}
+
+func (t *InterceptTun) SendToRelayMessage(dst wgdevice.NoisePublicKey, msg *ToRelayMessage) error {
+	return t.sendMessageWrapper(dst, &MessageWrapper{
+		MessageType: &MessageWrapper_ToRelay{
+			ToRelay: msg,
+		},
+	})
+}
+
+func (t *InterceptTun) SendFromRelayMessage(dst wgdevice.NoisePublicKey, msg *FromRelayMessage) error {
+	return t.sendMessageWrapper(dst, &MessageWrapper{
+		MessageType: &MessageWrapper_FromRelay{
+			FromRelay: msg,
+		},
+	})
 }
 
 // Read implements tun.Device.
@@ -311,14 +394,43 @@ func (t *InterceptTun) Read(bufs [][]byte, sizes []int, offset int) (int, error)
 	}
 }
 
+func (t *InterceptTun) handleProtoMessage(pkg *PubKeyPacket) error {
+	wrapper := &MessageWrapper{}
+	if err := proto.Unmarshal(pkg.Data(), wrapper); err != nil {
+		return err
+	}
+	t.log.Verbosef("received endpoint message")
+	switch m := wrapper.MessageType.(type) {
+	case *MessageWrapper_EndpointRequest:
+		if t.endpointRequestHandler != nil {
+			return t.endpointRequestHandler(pkg.Src(), pkg.Dst(), m.EndpointRequest)
+		}
+	case *MessageWrapper_EndpointResponse:
+		if t.endpointRequestHandler != nil {
+			return t.endpointResponseHandler(pkg.Src(), pkg.Dst(), m.EndpointResponse)
+		}
+	case *MessageWrapper_ToRelay:
+		if t.toRelayMessageHandler != nil {
+			return t.toRelayMessageHandler(pkg.Src(), pkg.Dst(), m.ToRelay)
+		}
+	case *MessageWrapper_FromRelay:
+		if t.fromRelayMessageHandler != nil {
+			return t.fromRelayMessageHandler(pkg.Src(), pkg.Dst(), m.FromRelay)
+		}
+	default:
+		t.log.Errorf("unknown message type %T", wrapper.MessageType)
+	}
+	return nil
+}
+
 // Write implements tun.Device.
 func (t *InterceptTun) Write(bufs [][]byte, offset int) (int, error) {
 	var newBufs [][]byte
 	write := 0
-	for i := 0; i < len(bufs); i++ {
+	for i := range bufs {
 		packet := bufs[i][offset:]
 		if pkPacket, ok := t.toPubKeyPacket(packet); ok {
-			t.inboundCh <- pkPacket
+			t.handleProtoMessage(pkPacket)
 			write += 1
 		} else {
 			newBufs = append(newBufs, bufs[i])

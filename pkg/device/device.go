@@ -8,6 +8,7 @@ import (
 
 	"github.com/bajacc/tinescale/pkg/derppool"
 	"github.com/bajacc/tinescale/pkg/endpointpool"
+	"github.com/bajacc/tinescale/pkg/relay"
 	"github.com/bajacc/tinescale/pkg/stunPool"
 	"github.com/bajacc/tinescale/pkg/tun"
 	"golang.zx2c4.com/wireguard/conn"
@@ -37,6 +38,7 @@ type Device struct {
 	}
 	stunPool     stunPool.StunPool
 	derpPool     derppool.DerpPool
+	relay        relay.Relay
 	endpointPool endpointpool.EndpointPool
 
 	// the following fields are mirrors from wg device
@@ -51,16 +53,19 @@ type Device struct {
 func (d *Device) AddPeer(key wgdevice.NoisePublicKey) {
 	d.tun.AddPeer(key)
 	d.endpointPool.AddPeer(key)
+	d.relay.AddPeer(key)
 }
 
 func (d *Device) RemovePeer(key wgdevice.NoisePublicKey) {
 	d.endpointPool.RemovePeer(key)
 	d.tun.RemovePeer(key)
+	d.relay.RemovePeer(key)
 }
 
 func (d *Device) ClearPeers() {
 	d.endpointPool.ClearPeers()
 	d.tun.ClearPeers()
+	d.relay.ClearPeers()
 }
 
 func (device *Device) Wait() chan struct{} {
@@ -82,6 +87,7 @@ func NewDevice(t wgtun.Device, bind conn.Bind, logger *wgdevice.Logger) DeviceIn
 	device.stunPool = stunPool.New(30*time.Second, 5*time.Second, logger)
 	device.net.bind = NewBind(bind, &device, logger)
 	device.endpointPool = endpointpool.New(logger, device.tun, bind, device.stunPool, 5*time.Second)
+	device.relay = relay.New(logger, device.tun)
 	device.inner = wgdevice.NewDevice(device.tun, device.net.bind, logger)
 
 	return &device
