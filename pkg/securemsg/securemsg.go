@@ -28,6 +28,7 @@ type SecureMsg interface {
 	HandleNoiseResponse(buf []byte) error
 	DecryptNoiseTransport(buf []byte) (*UnencryptedMessage, error)
 	EncryptNoiseTransport(msg *UnencryptedMessage, peerPublicKey [32]byte) ([]byte, error)
+	CreatePingMessage(nonce [4]byte) ([]byte, error)
 }
 
 type handshakeState struct {
@@ -294,10 +295,10 @@ func (s *secureMsg) generateNoiseResponse(peerKey [32]byte) ([]byte, error) {
 
 	// Continue noise handshake
 	hs.h = s.mixHash(hs.h[:], ephPub[:])
-	
+
 	dh, _ := curve25519.X25519(localEphemeral[:], hs.remoteEphemeral[:])
 	hs.ck, _ = s.mixKey(hs.ck[:], dh)
-	
+
 	dh, _ = curve25519.X25519(s.privateKey[:], hs.remoteEphemeral[:])
 	hs.ck, _ = s.mixKey(hs.ck[:], dh)
 
@@ -379,4 +380,16 @@ func (s *secureMsg) InitiateHandshake(peerPublicKey [32]byte) ([]byte, error) {
 	}
 
 	return proto.Marshal(noiseInit)
+}
+
+func (s *secureMsg) CreatePingMessage(nonce [4]byte) ([]byte, error) {
+	pingMsg := &PingMessage{
+		Nonce: binary.LittleEndian.Uint32(nonce[:]),
+	}
+
+	data, err := proto.Marshal(pingMsg)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }

@@ -12,7 +12,6 @@ import (
 
 	"github.com/bajacc/tinescale/pkg/securemsg"
 	"github.com/bajacc/tinescale/pkg/stunPool"
-	"github.com/bajacc/tinescale/pkg/tun"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 	"google.golang.org/protobuf/proto"
@@ -66,7 +65,6 @@ type EndpointPool interface {
 	ClearPeers()
 	Close()
 
-	GetAllEndpoints(pubKey wgdevice.NoisePublicKey) []conn.Endpoint
 	AddPeer(key wgdevice.NoisePublicKey)
 	RemovePeer(key wgdevice.NoisePublicKey)
 	SetListenPort(listenPort uint16)
@@ -124,6 +122,9 @@ const (
 )
 
 func (e *endpointPool) Send(bufs [][]byte, path *pathCandidate) error {
+	path.mu.RLock()
+	defer path.mu.RUnlock()
+
 	switch path.Type {
 	case PathUAPI, PathSTUN:
 		return e.bind.Send(bufs, path.Endpoint)
@@ -168,13 +169,14 @@ type pathCandidate struct {
 }
 
 type peerEndpoints struct {
-	mu            sync.RWMutex
-	stunEndpoints []conn.Endpoint
-	uapiEndpoint  conn.Endpoint
-	relayMode     RelayMode
+	uapiPathId string
+	stunPathId []string
 
-	pathCandidates     map[string]*pathCandidate
-	bestPathCandiateId string
+	mu        sync.RWMutex
+	relayMode RelayMode
+
+	pathCandidates map[string]*pathCandidate
+	bestPath       string
 }
 
 func (e *endpointPool) GetRecv(recv conn.ReceiveFunc) conn.ReceiveFunc {
@@ -189,40 +191,16 @@ func (e *endpointPool) GetRecv(recv conn.ReceiveFunc) conn.ReceiveFunc {
 			if bufs[i] == nil || sizes[i] == 0 {
 				continue
 			}
+			path, exists := e.dstToPathCandidate[eps[i].DstToString()]
+			if !exists {
+				return n, fmt.Errorf("no tinescale endpoint found for %s", eps[i].DstToString())
+			}
 			switch bufs[i][0] {
-			case 0x05: // Handshake Init message
-				response, err := e.securemsg.HandleNoiseInit(bufs[i][4:])
-				if err != nil {
-					e.log.Errorf("Failed to handle noise init: %v", err)
-					continue
+			case 0x05, 0x06, 0x07:
+				if err := e.processTinescaleMessage(bufs[i][0], bufs[i][4:sizes[i]], path); err != nil {
+					return n, err
 				}
-				// Prepend handshake response message type
-				responseMsg := make([]byte, 4+len(response))
-				responseMsg[0] = 0x06 // Handshake Response message type
-				copy(responseMsg[4:], response)
-				if err := e.bind.Send([][]byte{responseMsg}, eps[i]); err != nil {
-					e.log.Errorf("Failed to send handshake response: %v", err)
-				}
-			case 0x06: // Handshake Response message
-				if err := e.securemsg.HandleNoiseResponse(bufs[i][4:]); err != nil {
-					e.log.Errorf("Failed to handle noise response: %v", err)
-				}
-			case 0x07: // tinescale Transport message
-				msg, err := e.securemsg.DecryptNoiseTransport(bufs[i][4:])
-				if err != nil {
-					e.log.Errorf("Failed to decrypt transport message: %v", err)
-					continue
-				}
-				path, exists := e.dstToPathCandidate[eps[i].DstToString()]
-				if !exists {
-					return n, fmt.Errorf("no tinescale endpoint found for %s", eps[i].DstToString())
-				}
-				e.processUnencryptedMessage(msg, path)
 			default:
-				path, exists := e.dstToPathCandidate[eps[i].DstToString()]
-				if !exists {
-					return n, fmt.Errorf("no tinescale endpoint found for %s", eps[i].DstToString())
-				}
 				bufs[lastPos] = bufs[i]
 				eps[lastPos] = NewEndpoint(path.Key)
 				sizes[lastPos] = sizes[i]
@@ -242,129 +220,63 @@ func (e *endpointPool) pingAllEndpointCandidateLoop() {
 			return
 		case <-ticker.C:
 			e.mu.RLock()
-			for key, peer := range e.pool {
-				e.pingAllEndpointCandidate(key, peer)
+			for _, peer := range e.pool {
+				e.pingAllEndpointCandidate(peer)
 			}
 			e.mu.RUnlock()
-		case s := <-e.receivedPong:
-			e.mu.RLock()
-			peer, ok := e.pool[s.key]
-			e.mu.RUnlock()
-			if !ok {
-				e.log.Errorf("Received pong for unknown peer %x", s.key[:8])
-				continue
-			}
-			peer.mu.RLock()
-			for _, candidate := range peer.pathCandidates {
-				if candidate == nil || candidate.nonce != s.id {
-					continue
-				}
-				candidate.rtt = time.Since(candidate.pingSent)
-			}
-			peer.mu.RUnlock()
 		}
 	}
 }
 
-func createPingMessage() ([5]byte, error) {
-	var pingMsg [5]byte
-	pingMsg[0] = 0x05
-	_, err := rand.Read(pingMsg[1:5])
-	return pingMsg, err
-}
-
-func (e *endpointPool) pingAllEndpointCandidate(key wgdevice.NoisePublicKey, peer *peerEndpoints) {
+func (e *endpointPool) pingAllEndpointCandidate(peer *peerEndpoints) {
 	peer.mu.RLock()
 	defer peer.mu.RUnlock()
 	for _, candidate := range peer.pathCandidates {
 		if candidate == nil {
 			continue
 		}
-		if _, err := rand.Read(candidate.nonce[:]); err != nil {
+		if _, err := rand.Read(candidate.PingId[:]); err != nil {
 			e.log.Errorf("Failed to generate nonce for ping: %v", err)
 			continue
 		}
-		candidate.pingSent = time.Now()
-		if err := sendPing(candidate.nonce, candidate, e.bind); err != nil {
-			e.log.Errorf("Failed to send ping to endpoint: %v", err)
+		candidate.PingSent = time.Now()
+
+		var nonce [4]byte
+		rand.Read(nonce[:])
+		ping, err := e.securemsg.CreatePingMessage(nonce)
+		if err != nil {
+			e.log.Errorf("Failed to create ping message: %v", err)
 			continue
+		}
+
+		// Prepend handshake response message type
+		responseMsg := make([]byte, 4+len(ping))
+		responseMsg[0] = 0x07 // Handshake Transport message type
+		copy(responseMsg[4:], ping)
+		if err := e.Send([][]byte{responseMsg}, candidate); err != nil {
+			e.log.Errorf("Failed to send ping: %v", err)
 		}
 	}
 }
 
-func New(logger *wgdevice.Logger, conn tun.PubKeyConn, bind conn.Bind, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
+func New(logger *wgdevice.Logger, bind conn.Bind, stunPool stunPool.StunPool, updateInterval time.Duration) EndpointPool {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &endpointPool{
-		log:            logger,
-		pool:           make(map[wgdevice.NoisePublicKey]*peerEndpoints),
-		dstToKey:       make(map[string]wgdevice.NoisePublicKey),
-		stunPool:       stunPool,
-		conn:           conn,
-		bind:           bind,
-		updateInterval: updateInterval,
-		requestTimeout: 5 * time.Second,
-		receivedCh:     make(chan ReceivedPacket, 100),
-		receivedPong: make(chan struct {
-			key wgdevice.NoisePublicKey
-			id  [4]byte
-		}, 100),
-		ctx:    ctx,
-		cancel: cancel,
+		log:                logger,
+		pool:               make(map[wgdevice.NoisePublicKey]*peerEndpoints),
+		dstToPathCandidate: make(map[string]*pathCandidate),
+		stunPool:           stunPool,
+		bind:               bind,
+		updateInterval:     updateInterval,
+		requestTimeout:     5 * time.Second,
+		receivedCh:         make(chan ReceivedPacket, 1024),
+		ctx:                ctx,
+		cancel:             cancel,
 	}
 
-	conn.SetEndpointRequestHandler(func(src, dst wgdevice.NoisePublicKey, msg *tun.EndpointRequest) error {
-		return e.handleEndpointRequest(src, msg)
-	})
-
-	conn.SetEndpointResponseHandler(func(src, dst wgdevice.NoisePublicKey, msg *tun.EndpointResponse) error {
-		return e.handleEndpointResponse(src, msg)
-	})
-
-	conn.SetFromRelayMessageHandler(func(src, dst wgdevice.NoisePublicKey, msg *tun.FromRelayMessage) error {
-		e.mu.RLock()
-		peer, ok := e.pool[src]
-		e.mu.RUnlock()
-
-		if !ok {
-			e.log.Verbosef("Received message from unknown peer %x", src[:8])
-			return nil
-		}
-
-		peer.mu.RLock()
-		mode := peer.relayMode
-		peer.mu.RUnlock()
-
-		if ok && (mode == RelayOn || mode == RelayIngress) {
-
-			// TODO process ping message
-			e.receivedCh <- &receivedPacket{
-				source: wgdevice.NoisePublicKey(msg.SrcKey),
-				data:   msg.Data,
-			}
-		}
-		return nil
-	})
-
-	conn.SetToRelayMessageHandler(func(src, dst wgdevice.NoisePublicKey, msg *tun.ToRelayMessage) error {
-		e.mu.RLock()
-
-		if !e.isWgRelay {
-			e.mu.RUnlock()
-			return nil
-		}
-
-		e.mu.RUnlock()
-
-		fromRelay := &tun.FromRelayMessage{
-			SrcKey: msg.SrcKey,
-			DstKey: msg.DstKey,
-			Data:   msg.Data,
-		}
-		return conn.SendFromRelayMessage(wgdevice.NoisePublicKey(msg.DstKey), fromRelay)
-	})
-
 	go e.updateEndpointLoop(ctx)
+	go e.pingAllEndpointCandidateLoop()
 
 	return e
 }
@@ -400,26 +312,14 @@ func (e *endpointPool) SetUAPIEndpoint(key wgdevice.NoisePublicKey, ep conn.Endp
 	}
 	peer.mu.Lock()
 	defer peer.mu.Unlock()
-	peer.uapiEndpoint = ep
-}
-
-func (e *endpointPool) GetAllEndpoints(key wgdevice.NoisePublicKey) []conn.Endpoint {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	peer, exists := e.pool[key]
-	if !exists {
-		return nil
+	delete(peer.pathCandidates, peer.uapiPathId)
+	delete(e.dstToPathCandidate, peer.uapiPathId)
+	peer.uapiPathId = ep.DstToString()
+	peer.pathCandidates[peer.uapiPathId] = &pathCandidate{
+		Type:     PathUAPI,
+		Key:      key,
+		Endpoint: ep,
 	}
-
-	var result []conn.Endpoint
-	peer.mu.RLock()
-	defer peer.mu.RUnlock()
-	result = append(result, peer.stunEndpoints...)
-	if peer.uapiEndpoint != nil {
-		result = append(result, peer.uapiEndpoint)
-	}
-	return result
 }
 
 // AddPeer adds a new peer and starts periodic endpoint updates
@@ -465,12 +365,19 @@ func (e *endpointPool) updateEndpointLoop(ctx context.Context) {
 			e.mu.RLock()
 			e.log.Verbosef("send requestEndpoints")
 			for key := range e.pool {
-				request := &tun.EndpointRequest{
-					RequestId: uint32(mathrand.Int31()),
+				msg := &securemsg.UnencryptedMessage{
+					MessageType: &securemsg.UnencryptedMessage_EndpointRequest{
+						EndpointRequest: &securemsg.EndpointRequest{
+							RequestId: uint32(mathrand.Int31()),
+						},
+					},
 				}
-				if err := e.conn.SendEndpointRequest(key, request); err != nil {
-					e.log.Verbosef("Error requesting endpoints from peer %x: %v", key[:8], err)
+				buf, err := e.securemsg.EncryptNoiseTransport(msg, key)
+				if err != nil {
+					e.log.Verbosef("Failed to encrypt endpoint request: %v", err)
+					continue
 				}
+				e.SendBest([][]byte{buf}, NewEndpoint(key))
 			}
 			e.mu.RUnlock()
 		}
@@ -478,17 +385,9 @@ func (e *endpointPool) updateEndpointLoop(ctx context.Context) {
 }
 
 // processEndpointResponse processes an endpoint response and updates the peer's endpoints
-func (e *endpointPool) handleEndpointResponse(peerKey wgdevice.NoisePublicKey, response *tun.EndpointResponse) error {
-	e.mu.RLock()
-	peer, exists := e.pool[peerKey]
-	e.mu.RUnlock()
+func (e *endpointPool) handleEndpointResponse(response *securemsg.EndpointResponse, path *pathCandidate) error {
 
-	if !exists {
-		e.log.Verbosef("Received response for unknown peer %x", peerKey[:8])
-		return nil
-	}
-
-	var newEndpoints []conn.Endpoint
+	newPaths := make(map[string]*pathCandidate)
 	for _, addr := range response.Addresses {
 		endpointStr := fmt.Sprintf("%s:%d", net.IP(addr.Ip), addr.Port)
 		connEndpoint, err := e.bind.ParseEndpoint(endpointStr)
@@ -496,42 +395,70 @@ func (e *endpointPool) handleEndpointResponse(peerKey wgdevice.NoisePublicKey, r
 			e.log.Errorf("Failed to parse endpoint %s: %v", endpointStr, err)
 			continue
 		}
-		newEndpoints = append(newEndpoints, connEndpoint)
+		newPaths[connEndpoint.DstToString()] = &pathCandidate{
+			Type:     PathSTUN,
+			Key:      path.Key,
+			Endpoint: connEndpoint,
+		}
+	}
+
+	e.mu.RLock()
+	peer, exists := e.pool[path.Key]
+	if !exists {
+		e.mu.RUnlock()
+		return fmt.Errorf("endpoint response peer not found")
 	}
 
 	peer.mu.Lock()
-	e.log.Verbosef("received new endpoint: %v", newEndpoints)
-	peer.stunEndpoints = newEndpoints
+	for _, pathId := range peer.stunPathId {
+		delete(peer.pathCandidates, pathId)
+		delete(e.dstToPathCandidate, pathId)
+	}
+	peer.stunPathId = nil
+	for pathId, newPath := range newPaths {
+		peer.pathCandidates[pathId] = newPath
+		e.dstToPathCandidate[pathId] = newPath
+		peer.stunPathId = append(peer.stunPathId, pathId)
+	}
 	peer.mu.Unlock()
+	e.mu.RUnlock()
 	return nil
 }
 
 // handleEndpointRequest processes incoming endpoint requests and sends a response
-func (e *endpointPool) handleEndpointRequest(peerKey wgdevice.NoisePublicKey, request *tun.EndpointRequest) error {
-	e.log.Verbosef("Received endpoint request from peer %x", peerKey)
+func (e *endpointPool) handleEndpointRequest(request *securemsg.EndpointRequest, path *pathCandidate) error {
 
 	localEndpoints := e.getLocalEndpoints()
 	e.log.Verbosef("local endpoints to be sent %v", localEndpoints)
-	response := &tun.EndpointResponse{
-		RequestId: request.RequestId,
-		Addresses: localEndpoints,
+	msg := &securemsg.UnencryptedMessage{
+		MessageType: &securemsg.UnencryptedMessage_EndpointResponse{
+			EndpointResponse: &securemsg.EndpointResponse{
+				RequestId: request.RequestId,
+				Addresses: localEndpoints,
+			},
+		},
 	}
 
-	return e.conn.SendEndpointResponse(peerKey, response)
+	buf, err := e.securemsg.EncryptNoiseTransport(msg, path.Key)
+	if err != nil {
+		e.log.Errorf("Failed to encrypt endpoint response: %v", err)
+	}
+
+	return e.Send([][]byte{buf}, path)
 }
 
 // getLocalEndpoints returns the local endpoints that can be shared with peers
-func (e *endpointPool) getLocalEndpoints() []*tun.Address {
-	var result []*tun.Address
+func (e *endpointPool) getLocalEndpoints() []*securemsg.Address {
+	var result []*securemsg.Address
 
 	// Get STUN-discovered public endpoints
 	stunResults := e.stunPool.GetAllResults()
 	for _, stunResult := range stunResults {
-		result = append(result, &tun.Address{
+		result = append(result, &securemsg.Address{
 			Ip:   stunResult.PublicIP,
 			Port: uint32(stunResult.PublicPort),
 		})
-		result = append(result, &tun.Address{
+		result = append(result, &securemsg.Address{
 			Ip:   stunResult.LocalIP,
 			Port: uint32(e.listenPort),
 		})
@@ -550,18 +477,100 @@ func (e *endpointPool) processUnencryptedMessage(msg *securemsg.UnencryptedMessa
 	case *securemsg.UnencryptedMessage_PongMessage:
 		e.handlePongMessage(msgType.PongMessage, path)
 	case *securemsg.UnencryptedMessage_EndpointRequest:
-		// These should be handled through the tun connection handlers
-		e.log.Verbosef("Received EndpointRequest via encrypted transport from %s", ep.DstToString())
+		e.handleEndpointRequest(msgType.EndpointRequest, path)
 	case *securemsg.UnencryptedMessage_EndpointResponse:
-		// These should be handled through the tun connection handlers
-		e.log.Verbosef("Received EndpointResponse via encrypted transport from %s", ep.DstToString())
+		e.handleEndpointResponse(msgType.EndpointResponse, path)
 	case *securemsg.UnencryptedMessage_ToRelay:
-		e.log.Verbosef("Received ToRelay message via encrypted transport from %s", ep.DstToString())
+		e.handleToRelayMessage(msgType.ToRelay, path)
 	case *securemsg.UnencryptedMessage_FromRelay:
-		e.log.Verbosef("Received FromRelay message via encrypted transport from %s", ep.DstToString())
+		e.handleFromRelayMessage(msgType.FromRelay, path)
 	default:
-		e.log.Errorf("Unknown message type in unencrypted message from %s", ep.DstToString())
+		e.log.Errorf("Unknown message type in unencrypted message from %v", path)
 	}
+}
+
+func (e *endpointPool) handleFromRelayMessage(msg *securemsg.FromRelayMessage, path *pathCandidate) {
+	e.mu.RLock()
+	peer, ok := e.pool[wgdevice.NoisePublicKey(msg.DstKey)]
+	e.mu.RUnlock()
+
+	if !ok {
+		e.log.Verbosef("Received message from unknown peer %x", msg.DstKey)
+		return
+	}
+
+	peer.mu.RLock()
+	mode := peer.relayMode
+	peer.mu.RUnlock()
+
+	if mode == RelayOff || mode == RelayEgress {
+		return
+	}
+
+	switch msg.Data[0] {
+	case 0x05, 0x06, 0x07:
+		e.processTinescaleMessage(msg.Data[0], msg.Data[4:], path)
+	default:
+		e.receivedCh <- &receivedPacket{
+			source: wgdevice.NoisePublicKey(msg.SrcKey),
+			data:   msg.Data,
+		}
+	}
+}
+
+func (e *endpointPool) processTinescaleMessage(message_type byte, buf []byte, path *pathCandidate) error {
+	switch message_type {
+	case 0x05: // Handshake Init message
+		response, err := e.securemsg.HandleNoiseInit(buf)
+		if err != nil {
+			return err
+		}
+		// Prepend handshake response message type
+		responseMsg := make([]byte, 4+len(response))
+		responseMsg[0] = 0x06 // Handshake Response message type
+		copy(responseMsg[4:], response)
+		if err := e.Send([][]byte{responseMsg}, path); err != nil {
+			return fmt.Errorf("failed to send handshake response: %v", err)
+		}
+	case 0x06: // Handshake Response message
+		if err := e.securemsg.HandleNoiseResponse(buf); err != nil {
+			return fmt.Errorf("failed to handle noise response: %v", err)
+		}
+	case 0x07: // tinescale Transport message
+		msg, err := e.securemsg.DecryptNoiseTransport(buf)
+		if err != nil {
+			return fmt.Errorf("failed to decrypt transport message: %v", err)
+		}
+		e.processUnencryptedMessage(msg, path)
+	}
+	return nil
+}
+
+func (e *endpointPool) handleToRelayMessage(relay *securemsg.ToRelayMessage, path *pathCandidate) {
+	e.mu.RLock()
+
+	if !e.isWgRelay {
+		e.mu.RUnlock()
+		return
+	}
+
+	e.mu.RUnlock()
+
+	msg := &securemsg.UnencryptedMessage{
+		MessageType: &securemsg.UnencryptedMessage_FromRelay{
+			FromRelay: &securemsg.FromRelayMessage{
+				SrcKey: relay.SrcKey,
+				DstKey: relay.DstKey,
+				Data:   relay.Data,
+			},
+		},
+	}
+	buf, err := e.securemsg.EncryptNoiseTransport(msg, path.Key)
+	if err != nil {
+		e.log.Errorf("Failed to encrypt from relay message: %v", err)
+		return
+	}
+	e.Send([][]byte{buf}, path)
 }
 
 func (e *endpointPool) handlePingMessage(ping *securemsg.PingMessage, path *pathCandidate) {
@@ -630,8 +639,8 @@ func (e *endpointPool) SendBest(bufs [][]byte, connEp conn.Endpoint) error {
 	defer peer.mu.RUnlock()
 
 	// Use best path candidate if available
-	if peer.bestPathCandiateId != "" {
-		if candidate, exists := peer.pathCandidates[peer.bestPathCandiateId]; exists {
+	if peer.bestPath != "" {
+		if candidate, exists := peer.pathCandidates[peer.bestPath]; exists {
 			return e.Send(bufs, candidate)
 		}
 	}
