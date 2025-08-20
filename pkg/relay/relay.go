@@ -25,7 +25,7 @@ type Relay interface {
 	SetPeerRelayMode(key wgdevice.NoisePublicKey, mode RelayMode)
 	SetWgRelay(isRelay bool)
 	IsWgRelay() bool
-	Send(bufs [][]byte, publicKey wgdevice.NoisePublicKey) error
+	Send(bufs [][]byte, dst wgdevice.NoisePublicKey) error
 	GetAllRelay() []wgdevice.NoisePublicKey
 }
 
@@ -58,7 +58,7 @@ func (r *relay) Send(bufs [][]byte, dst wgdevice.NoisePublicKey) error {
 			Data:   data,
 		}
 		for _, key := range relays {
-			if r.conn.SendToRelayMessage(key, toRelayMessage) == nil {
+			if key != dst && r.conn.SendToRelayMessage(key, toRelayMessage) == nil {
 				break
 			}
 		}

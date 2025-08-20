@@ -4,64 +4,26 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/netip"
 
+	"github.com/bajacc/tinescale/pkg/endpointpool"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
 )
 
 type Bind struct {
-	inner  conn.Bind
-	device *Device
-	log    *wgdevice.Logger
-	cancel context.CancelFunc
+	log          *wgdevice.Logger
+	inner        conn.Bind
+	endpointPool endpointpool.EndpointPool
+	cancel       context.CancelFunc
 }
 
-type Endpoint struct {
-	origPubKey wgdevice.NoisePublicKey
-}
-
-func NewBind(inner conn.Bind, device *Device, logger *wgdevice.Logger) *Bind {
+func NewBind(inner conn.Bind, endpointPool endpointpool.EndpointPool, logger *wgdevice.Logger) *Bind {
 	return &Bind{
-		inner:  inner,
-		device: device,
-		log:    logger,
-		cancel: func() {},
+		inner:        inner,
+		endpointPool: endpointPool,
+		log:          logger,
+		cancel:       func() {},
 	}
-}
-
-// ClearSrc implements conn.Endpoint.
-func (e *Endpoint) ClearSrc() {}
-
-// DstIP implements conn.Endpoint.
-func (e *Endpoint) DstIP() netip.Addr {
-	// TODO do we need that?
-	// Generate a deterministic IP from the public key for rate limiting
-	// Use the first 4 bytes of the public key as an IPv4 address in the 10.0.0.0/8 range
-	if len(e.origPubKey) >= 4 {
-		return netip.AddrFrom4([4]byte{10, e.origPubKey[0], e.origPubKey[1], e.origPubKey[2]})
-	}
-	return netip.Addr{}
-}
-
-// DstToBytes implements conn.Endpoint.
-func (e *Endpoint) DstToBytes() []byte {
-	return e.origPubKey[:]
-}
-
-// DstToString implements conn.Endpoint.
-func (e *Endpoint) DstToString() string {
-	return fmt.Sprintf("tinescale:%x", e.origPubKey[:8])
-}
-
-// SrcIP implements conn.Endpoint.
-func (e *Endpoint) SrcIP() netip.Addr {
-	return netip.Addr{}
-}
-
-// SrcToString implements conn.Endpoint.
-func (e *Endpoint) SrcToString() string {
-	return ""
 }
 
 func (b *Bind) ParseEndpoint(s string) (conn.Endpoint, error) {
@@ -70,9 +32,7 @@ func (b *Bind) ParseEndpoint(s string) (conn.Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Endpoint{
-		origPubKey: publicKey,
-	}, nil
+	return endpointpool.NewEndpoint(publicKey), nil
 }
 
 func (b *Bind) ParseInnerEndpoint(s string) (conn.Endpoint, error) {
@@ -102,93 +62,31 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	}
 
 	var fns []conn.ReceiveFunc
-	for _, innerFn := range innerFns {
-		recv := innerFn
-		fn := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
-			n, err := recv(bufs, sizes, eps)
-			if err != nil {
-				return n, err
-			}
-
-			for i := range n {
-				key, exists := b.device.endpointPool.FindKey(eps[i])
-				if !exists {
-					return n, fmt.Errorf("no tinescale endpoint found for %s", eps[i].DstToString())
-				}
-				eps[i] = &Endpoint{origPubKey: *key}
-			}
-			return n, nil
-		}
+	for _, recv := range innerFns {
+		fn := b.endpointPool.GetRecv(recv)
 		fns = append(fns, fn)
 	}
 
-	derpFn := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+	epPoolFn := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
 		select {
 		case <-ctx.Done():
 			return 0, net.ErrClosed
-		case packet, ok := <-b.device.derpPool.ReceiveChannel():
+		case packet, ok := <-b.endpointPool.ReceiveChannel():
 			if !ok {
 				return 0, fmt.Errorf("derp pool channel closed")
 			}
 			n := copy(bufs[0][:], packet.Data())
 			sizes[0] = n
-			eps[0] = &Endpoint{
-				origPubKey: packet.Source(),
-			}
+			eps[0] = endpointpool.NewEndpoint(packet.Source())
 			return 1, nil
 		}
 	}
 
-	wgRelayFn := func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
-		select {
-		case <-ctx.Done():
-			return 0, net.ErrClosed
-		case msg, ok := <-b.device.relay.ReceiveChannel():
-			if !ok {
-				return 0, fmt.Errorf("relay pool channel closed")
-			}
-			n := copy(bufs[0][:], msg.Data())
-			sizes[0] = n
-			eps[0] = &Endpoint{
-				origPubKey: msg.Source(),
-			}
-			return 1, nil
-		}
-	}
-
-	fns = append(fns, derpFn, wgRelayFn)
+	fns = append(fns, epPoolFn)
 
 	return fns, actualPort, err
 }
 
 func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
-	ep, ok := endpoint.(*Endpoint)
-	if !ok {
-		return fmt.Errorf("Error Enpoint is not a tinescale endpoint")
-	}
-
-	var err error
-	endpoints := b.device.endpointPool.GetAllEndpoints(ep.origPubKey)
-
-	// else send via stun configured endpoints
-	b.log.Verbosef("try endpoints %v", endpoints)
-	for _, endpoint := range endpoints {
-		err = b.inner.Send(bufs, endpoint)
-		b.log.Verbosef("try send endpoint %v %v", endpoint, err)
-		if err == nil {
-			return nil
-		}
-	}
-
-	// else send via DERP
-	if err := b.device.derpPool.Send(bufs, ep.origPubKey); err == nil {
-		b.log.Verbosef("sent via derp")
-		return nil
-	}
-
-	// else send via relay
-	b.device.relay.Send(bufs, ep.origPubKey)
-	b.log.Verbosef("sent via wg relay")
-
-	return err
+	return b.endpointPool.Send(bufs, endpoint)
 }
