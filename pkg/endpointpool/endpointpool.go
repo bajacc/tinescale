@@ -4,15 +4,18 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	mathrand "math/rand"
 	"net"
 	"net/netip"
 	"sync"
 	"time"
 
+	"github.com/bajacc/tinescale/pkg/securemsg"
 	"github.com/bajacc/tinescale/pkg/stunPool"
 	"github.com/bajacc/tinescale/pkg/tun"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdevice "golang.zx2c4.com/wireguard/device"
+	"google.golang.org/protobuf/proto"
 )
 
 type endpoint struct {
@@ -69,31 +72,28 @@ type EndpointPool interface {
 	SetListenPort(listenPort uint16)
 	SetUAPIEndpoint(key wgdevice.NoisePublicKey, ep conn.Endpoint)
 	GetRecv(recv conn.ReceiveFunc) conn.ReceiveFunc
-	Send(bufs [][]byte, ep conn.Endpoint) error
+	SendBest(bufs [][]byte, ep conn.Endpoint) error
 	ReceiveChannel() <-chan ReceivedPacket
 }
 
 type endpointPool struct {
-	log        *wgdevice.Logger
-	mu         sync.RWMutex
-	pool       map[wgdevice.NoisePublicKey]*peerEndpoints
-	dstToKey   map[string]wgdevice.NoisePublicKey
-	stunPool   stunPool.StunPool
-	listenPort uint16
-	bind       conn.Bind
+	log                *wgdevice.Logger
+	mu                 sync.RWMutex
+	pool               map[wgdevice.NoisePublicKey]*peerEndpoints
+	dstToPathCandidate map[string]*pathCandidate
+	stunPool           stunPool.StunPool
+	listenPort         uint16
+	bind               conn.Bind
+	localKey           wgdevice.NoisePrivateKey
 
-	conn           tun.PubKeyConn
 	updateInterval time.Duration
 	requestTimeout time.Duration
 	receivedCh     chan ReceivedPacket
-	receivedPong   chan struct {
-		key wgdevice.NoisePublicKey
-		id  [4]byte
-	}
 
 	ctx       context.Context
 	cancel    context.CancelFunc
 	isWgRelay bool
+	securemsg securemsg.SecureMsg
 }
 
 type ReceivedPacket interface {
@@ -123,23 +123,28 @@ const (
 	RelayOn
 )
 
-func (c *pathCandidate) Send(bufs [][]byte) error {
-	// TODO
-	if c.Type == PathUAPI {
-		return c.Endpoint.Send(bufs)
-	} else if c.Type == PathSTUN {
-		return c.Endpoint.Send(bufs)
-	} else if c.Type == PathRelay {
-		return c.Endpoint.Send(bufs)
+func (e *endpointPool) Send(bufs [][]byte, path *pathCandidate) error {
+	switch path.Type {
+	case PathUAPI, PathSTUN:
+		return e.bind.Send(bufs, path.Endpoint)
+	case PathRelayUDP:
+		var toRelayMessages [][]byte
+		for _, data := range bufs {
+			toRelayMessage := securemsg.ToRelayMessage{
+				SrcKey: e.localKey[:],
+				DstKey: path.Key[:],
+				Data:   data,
+			}
+			buf, err := proto.Marshal(&toRelayMessage)
+			if err != nil {
+				return fmt.Errorf("failed to marshal ToRelayMessage: %w", err)
+			}
+			toRelayMessages = append(toRelayMessages, buf)
+		}
+		return e.bind.Send(toRelayMessages, path.Endpoint)
+	default:
+		return fmt.Errorf("unknown path type: %d", path.Type)
 	}
-	return fmt.Errorf("unknown path type: %d", c.Type)
-}
-
-func sendPing(id [4]byte, c PathCandidate) error {
-	var pingMsg [5]byte
-	pingMsg[0] = 0x05
-	copy(pingMsg[1:5], id[:])
-	return c.Send([][]byte{pingMsg[:]})
 }
 
 type PathType int
@@ -147,15 +152,18 @@ type PathType int
 const (
 	PathUAPI PathType = iota
 	PathSTUN
-	PathRelay
+	PathRelayUDP
 )
 
 type pathCandidate struct {
+	mu       sync.RWMutex
 	Type     PathType
+	Key      wgdevice.NoisePublicKey
 	Endpoint conn.Endpoint
-	pingSent time.Time
-	pingId   [4]byte
-	rtt      time.Duration
+
+	PingSent time.Time
+	PingId   [4]byte
+	Rtt      time.Duration
 	Lastseen time.Time
 }
 
@@ -182,39 +190,41 @@ func (e *endpointPool) GetRecv(recv conn.ReceiveFunc) conn.ReceiveFunc {
 				continue
 			}
 			switch bufs[i][0] {
-			case 0x05: // Ping message
-				// TODO process ping
-				if sizes[i] < 5 {
-					return n, fmt.Errorf("invalid ping message length: %d", len(bufs[i]))
+			case 0x05: // Handshake Init message
+				response, err := e.securemsg.HandleNoiseInit(bufs[i][4:])
+				if err != nil {
+					e.log.Errorf("Failed to handle noise init: %v", err)
+					continue
 				}
-				bufs[i][0] = 0x06 // Change to Pong message
-				e.bind.Send([][]byte{bufs[i][1:5]}, eps[i])
-				continue
-			case 0x06: // Pong message
-				if sizes[i] < 5 {
-					return n, fmt.Errorf("invalid pong message length: %d", len(bufs[i]))
+				// Prepend handshake response message type
+				responseMsg := make([]byte, 4+len(response))
+				responseMsg[0] = 0x06 // Handshake Response message type
+				copy(responseMsg[4:], response)
+				if err := e.bind.Send([][]byte{responseMsg}, eps[i]); err != nil {
+					e.log.Errorf("Failed to send handshake response: %v", err)
 				}
-				// TODO process pong
-				bufs[lastPos] = bufs[i]
-				key, exists := e.dstToKey[eps[i].DstToString()]
+			case 0x06: // Handshake Response message
+				if err := e.securemsg.HandleNoiseResponse(bufs[i][4:]); err != nil {
+					e.log.Errorf("Failed to handle noise response: %v", err)
+				}
+			case 0x07: // tinescale Transport message
+				msg, err := e.securemsg.DecryptNoiseTransport(bufs[i][4:])
+				if err != nil {
+					e.log.Errorf("Failed to decrypt transport message: %v", err)
+					continue
+				}
+				path, exists := e.dstToPathCandidate[eps[i].DstToString()]
 				if !exists {
 					return n, fmt.Errorf("no tinescale endpoint found for %s", eps[i].DstToString())
 				}
-				e.receivedPong <- struct {
-					key   wgdevice.NoisePublicKey
-					nonce [4]byte
-				}{
-					key:   key,
-					nonce: [4]byte{bufs[i][1], bufs[i][2], bufs[i][3], bufs[i][4]},
-				}
-				continue
+				e.processUnencryptedMessage(msg, path)
 			default:
-				bufs[lastPos] = bufs[i]
-				key, exists := e.dstToKey[eps[i].DstToString()]
+				path, exists := e.dstToPathCandidate[eps[i].DstToString()]
 				if !exists {
 					return n, fmt.Errorf("no tinescale endpoint found for %s", eps[i].DstToString())
 				}
-				eps[lastPos] = NewEndpoint(key)
+				bufs[lastPos] = bufs[i]
+				eps[lastPos] = NewEndpoint(path.Key)
 				sizes[lastPos] = sizes[i]
 				lastPos += 1
 			}
@@ -246,7 +256,7 @@ func (e *endpointPool) pingAllEndpointCandidateLoop() {
 			}
 			peer.mu.RLock()
 			for _, candidate := range peer.pathCandidates {
-				if candidate == nil || candidate.nonce != s.nonce {
+				if candidate == nil || candidate.nonce != s.id {
 					continue
 				}
 				candidate.rtt = time.Since(candidate.pingSent)
@@ -270,15 +280,13 @@ func (e *endpointPool) pingAllEndpointCandidate(key wgdevice.NoisePublicKey, pee
 		if candidate == nil {
 			continue
 		}
-		var nonce [4]byte
-		if _, err := rand.Read(candidate.nonce); err != nil {
+		if _, err := rand.Read(candidate.nonce[:]); err != nil {
 			e.log.Errorf("Failed to generate nonce for ping: %v", err)
 			continue
 		}
-		// TODO
 		candidate.pingSent = time.Now()
-		if err := sendPing(nonce, candidate); err != nil {
-			e.log.Errorf("Failed to send ping to endpoint %s: %v", candidate.DstToString(), err)
+		if err := sendPing(candidate.nonce, candidate, e.bind); err != nil {
+			e.log.Errorf("Failed to send ping to endpoint: %v", err)
 			continue
 		}
 	}
@@ -290,13 +298,19 @@ func New(logger *wgdevice.Logger, conn tun.PubKeyConn, bind conn.Bind, stunPool 
 	e := &endpointPool{
 		log:            logger,
 		pool:           make(map[wgdevice.NoisePublicKey]*peerEndpoints),
+		dstToKey:       make(map[string]wgdevice.NoisePublicKey),
 		stunPool:       stunPool,
 		conn:           conn,
 		bind:           bind,
 		updateInterval: updateInterval,
 		requestTimeout: 5 * time.Second,
-		ctx:            ctx,
-		cancel:         cancel,
+		receivedCh:     make(chan ReceivedPacket, 100),
+		receivedPong: make(chan struct {
+			key wgdevice.NoisePublicKey
+			id  [4]byte
+		}, 100),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	conn.SetEndpointRequestHandler(func(src, dst wgdevice.NoisePublicKey, msg *tun.EndpointRequest) error {
@@ -418,7 +432,9 @@ func (e *endpointPool) AddPeer(key wgdevice.NoisePublicKey) {
 		e.log.Verbosef("Peer %x already exists in endpoint pool", key[:8])
 		return
 	}
-	e.pool[key] = &peerEndpoints{}
+	e.pool[key] = &peerEndpoints{
+		pathCandidates: make(map[string]*pathCandidate),
+	}
 
 	e.log.Verbosef("Added peer %x to endpoint pool", key[:8])
 }
@@ -450,7 +466,7 @@ func (e *endpointPool) updateEndpointLoop(ctx context.Context) {
 			e.log.Verbosef("send requestEndpoints")
 			for key := range e.pool {
 				request := &tun.EndpointRequest{
-					RequestId: rand.Uint32(),
+					RequestId: uint32(mathrand.Int31()),
 				}
 				if err := e.conn.SendEndpointRequest(key, request); err != nil {
 					e.log.Verbosef("Error requesting endpoints from peer %x: %v", key[:8], err)
@@ -523,10 +539,84 @@ func (e *endpointPool) getLocalEndpoints() []*tun.Address {
 	return result
 }
 
-func (e *endpointPool) Send(bufs [][]byte, connEp conn.Endpoint) error {
+func (e *endpointPool) processUnencryptedMessage(msg *securemsg.UnencryptedMessage, path *pathCandidate) {
+	if msg == nil {
+		return
+	}
+
+	switch msgType := msg.GetMessageType().(type) {
+	case *securemsg.UnencryptedMessage_PingMessage:
+		e.handlePingMessage(msgType.PingMessage, path)
+	case *securemsg.UnencryptedMessage_PongMessage:
+		e.handlePongMessage(msgType.PongMessage, path)
+	case *securemsg.UnencryptedMessage_EndpointRequest:
+		// These should be handled through the tun connection handlers
+		e.log.Verbosef("Received EndpointRequest via encrypted transport from %s", ep.DstToString())
+	case *securemsg.UnencryptedMessage_EndpointResponse:
+		// These should be handled through the tun connection handlers
+		e.log.Verbosef("Received EndpointResponse via encrypted transport from %s", ep.DstToString())
+	case *securemsg.UnencryptedMessage_ToRelay:
+		e.log.Verbosef("Received ToRelay message via encrypted transport from %s", ep.DstToString())
+	case *securemsg.UnencryptedMessage_FromRelay:
+		e.log.Verbosef("Received FromRelay message via encrypted transport from %s", ep.DstToString())
+	default:
+		e.log.Errorf("Unknown message type in unencrypted message from %s", ep.DstToString())
+	}
+}
+
+func (e *endpointPool) handlePingMessage(ping *securemsg.PingMessage, path *pathCandidate) {
+	if ping == nil {
+		return
+	}
+
+	e.log.Verbosef("Received ping with nonce %d", ping.Nonce)
+
+	pong := &securemsg.UnencryptedMessage{
+		MessageType: &securemsg.UnencryptedMessage_PongMessage{
+			PongMessage: &securemsg.PongMessage{
+				Nonce: ping.Nonce,
+			},
+		},
+	}
+
+	// Encrypt and send pong
+	encryptedPong, err := e.securemsg.EncryptNoiseTransport(pong, path.Key)
+	if err != nil {
+		e.log.Errorf("Failed to encrypt pong message: %v", err)
+		return
+	}
+
+	// Prepend transport message type
+	transportMsg := make([]byte, 4+len(encryptedPong))
+	transportMsg[0] = 0x07 // Transport message type
+	copy(transportMsg[4:], encryptedPong)
+
+	if err := e.Send([][]byte{transportMsg}, path); err != nil {
+		e.log.Errorf("Failed to send pong message: %v", err)
+	}
+}
+
+func (e *endpointPool) handlePongMessage(pong *securemsg.PongMessage, path *pathCandidate) {
+
+	// Convert nonce to [4]byte format
+	var nonceBytes [4]byte
+	nonceBytes[0] = byte(pong.Nonce)
+	nonceBytes[1] = byte(pong.Nonce >> 8)
+	nonceBytes[2] = byte(pong.Nonce >> 16)
+	nonceBytes[3] = byte(pong.Nonce >> 24)
+
+	path.mu.Lock()
+	defer path.mu.Unlock()
+	if path.PingId == nonceBytes {
+		path.Rtt = time.Since(path.PingSent)
+		path.Lastseen = time.Now()
+	}
+}
+
+func (e *endpointPool) SendBest(bufs [][]byte, connEp conn.Endpoint) error {
 	ep, ok := connEp.(*endpoint)
 	if !ok {
-		return fmt.Errorf("Error Enpoint is not a tinescale endpoint")
+		return fmt.Errorf("error enpoint is not a tinescale endpoint")
 	}
 
 	e.mu.RLock()
@@ -538,9 +628,24 @@ func (e *endpointPool) Send(bufs [][]byte, connEp conn.Endpoint) error {
 
 	peer.mu.RLock()
 	defer peer.mu.RUnlock()
-	candidate, exists := peer.pathCandidates[/*TODO */ ]
-	if !exists {
-		return fmt.Errorf("no path candidate found for endpoint %s", ep.DstToString())
+
+	// Use best path candidate if available
+	if peer.bestPathCandiateId != "" {
+		if candidate, exists := peer.pathCandidates[peer.bestPathCandiateId]; exists {
+			return e.Send(bufs, candidate)
+		}
 	}
-	return candidate.Send(bufs)
+
+	// Fallback to any available candidate
+	for _, candidate := range peer.pathCandidates {
+		if candidate != nil {
+			return e.Send(bufs, candidate)
+		}
+	}
+
+	return fmt.Errorf("no path candidate available for endpoint %s", ep.DstToString())
+}
+
+func (e *endpointPool) ReceiveChannel() <-chan ReceivedPacket {
+	return e.receivedCh
 }

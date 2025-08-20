@@ -88,5 +88,5 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 }
 
 func (b *Bind) Send(bufs [][]byte, endpoint conn.Endpoint) error {
-	return b.endpointPool.Send(bufs, endpoint)
+	return b.endpointPool.SendBest(bufs, endpoint)
 }

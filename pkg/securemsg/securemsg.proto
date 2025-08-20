@@ -4,7 +4,7 @@ package securemsg;
 
 option go_package = "github.com/bajacc/tinescale/pkg/securemsg";
 
-message MessageWrapper {
+message UnencryptedMessage {
     oneof message_type {
         EndpointRequest endpoint_request = 1;
         EndpointResponse endpoint_response = 2;
@@ -14,7 +14,6 @@ message MessageWrapper {
         PongMessage pong_message = 6;
     }
 }
-
 
 message Address {
     bytes ip = 1;
@@ -48,4 +47,22 @@ message PingMessage {
 
 message PongMessage {
     uint32 nonce = 1; // 4-byte nonce
+}
+
+message NoiseHandshakeInit {
+    bytes sender_static = 1;    // 32-byte static public key
+    bytes ephemeral = 2;        // 32-byte ephemeral public key
+    bytes encrypted_static = 3; // 48-byte encrypted static key
+    bytes encrypted_timestamp = 4; // 28-byte encrypted timestamp
+}
+
+message NoiseHandshakeResponse {
+    bytes sender_static = 1;    // 32-byte static public key
+    bytes ephemeral = 2;        // 32-byte ephemeral public key
+    bytes encrypted_nothing = 3; // 16-byte encrypted empty payload
+}
+
+message NoiseTransportMessage {
+    uint32 counter = 1;         // Transport message counter
+    bytes encrypted_data = 2;   // Encrypted payload with 16-byte auth tag
 }

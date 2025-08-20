@@ -21,35 +21,35 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type MessageWrapper struct {
+type UnencryptedMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to MessageType:
 	//
-	//	*MessageWrapper_EndpointRequest
-	//	*MessageWrapper_EndpointResponse
-	//	*MessageWrapper_ToRelay
-	//	*MessageWrapper_FromRelay
-	//	*MessageWrapper_PingMessage
-	//	*MessageWrapper_PongMessage
-	MessageType   isMessageWrapper_MessageType `protobuf_oneof:"message_type"`
+	//	*UnencryptedMessage_EndpointRequest
+	//	*UnencryptedMessage_EndpointResponse
+	//	*UnencryptedMessage_ToRelay
+	//	*UnencryptedMessage_FromRelay
+	//	*UnencryptedMessage_PingMessage
+	//	*UnencryptedMessage_PongMessage
+	MessageType   isUnencryptedMessage_MessageType `protobuf_oneof:"message_type"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *MessageWrapper) Reset() {
-	*x = MessageWrapper{}
+func (x *UnencryptedMessage) Reset() {
+	*x = UnencryptedMessage{}
 	mi := &file_securemsg_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MessageWrapper) String() string {
+func (x *UnencryptedMessage) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MessageWrapper) ProtoMessage() {}
+func (*UnencryptedMessage) ProtoMessage() {}
 
-func (x *MessageWrapper) ProtoReflect() protoreflect.Message {
+func (x *UnencryptedMessage) ProtoReflect() protoreflect.Message {
 	mi := &file_securemsg_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -61,111 +61,111 @@ func (x *MessageWrapper) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MessageWrapper.ProtoReflect.Descriptor instead.
-func (*MessageWrapper) Descriptor() ([]byte, []int) {
+// Deprecated: Use UnencryptedMessage.ProtoReflect.Descriptor instead.
+func (*UnencryptedMessage) Descriptor() ([]byte, []int) {
 	return file_securemsg_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *MessageWrapper) GetMessageType() isMessageWrapper_MessageType {
+func (x *UnencryptedMessage) GetMessageType() isUnencryptedMessage_MessageType {
 	if x != nil {
 		return x.MessageType
 	}
 	return nil
 }
 
-func (x *MessageWrapper) GetEndpointRequest() *EndpointRequest {
+func (x *UnencryptedMessage) GetEndpointRequest() *EndpointRequest {
 	if x != nil {
-		if x, ok := x.MessageType.(*MessageWrapper_EndpointRequest); ok {
+		if x, ok := x.MessageType.(*UnencryptedMessage_EndpointRequest); ok {
 			return x.EndpointRequest
 		}
 	}
 	return nil
 }
 
-func (x *MessageWrapper) GetEndpointResponse() *EndpointResponse {
+func (x *UnencryptedMessage) GetEndpointResponse() *EndpointResponse {
 	if x != nil {
-		if x, ok := x.MessageType.(*MessageWrapper_EndpointResponse); ok {
+		if x, ok := x.MessageType.(*UnencryptedMessage_EndpointResponse); ok {
 			return x.EndpointResponse
 		}
 	}
 	return nil
 }
 
-func (x *MessageWrapper) GetToRelay() *ToRelayMessage {
+func (x *UnencryptedMessage) GetToRelay() *ToRelayMessage {
 	if x != nil {
-		if x, ok := x.MessageType.(*MessageWrapper_ToRelay); ok {
+		if x, ok := x.MessageType.(*UnencryptedMessage_ToRelay); ok {
 			return x.ToRelay
 		}
 	}
 	return nil
 }
 
-func (x *MessageWrapper) GetFromRelay() *FromRelayMessage {
+func (x *UnencryptedMessage) GetFromRelay() *FromRelayMessage {
 	if x != nil {
-		if x, ok := x.MessageType.(*MessageWrapper_FromRelay); ok {
+		if x, ok := x.MessageType.(*UnencryptedMessage_FromRelay); ok {
 			return x.FromRelay
 		}
 	}
 	return nil
 }
 
-func (x *MessageWrapper) GetPingMessage() *PingMessage {
+func (x *UnencryptedMessage) GetPingMessage() *PingMessage {
 	if x != nil {
-		if x, ok := x.MessageType.(*MessageWrapper_PingMessage); ok {
+		if x, ok := x.MessageType.(*UnencryptedMessage_PingMessage); ok {
 			return x.PingMessage
 		}
 	}
 	return nil
 }
 
-func (x *MessageWrapper) GetPongMessage() *PongMessage {
+func (x *UnencryptedMessage) GetPongMessage() *PongMessage {
 	if x != nil {
-		if x, ok := x.MessageType.(*MessageWrapper_PongMessage); ok {
+		if x, ok := x.MessageType.(*UnencryptedMessage_PongMessage); ok {
 			return x.PongMessage
 		}
 	}
 	return nil
 }
 
-type isMessageWrapper_MessageType interface {
-	isMessageWrapper_MessageType()
+type isUnencryptedMessage_MessageType interface {
+	isUnencryptedMessage_MessageType()
 }
 
-type MessageWrapper_EndpointRequest struct {
+type UnencryptedMessage_EndpointRequest struct {
 	EndpointRequest *EndpointRequest `protobuf:"bytes,1,opt,name=endpoint_request,json=endpointRequest,proto3,oneof"`
 }
 
-type MessageWrapper_EndpointResponse struct {
+type UnencryptedMessage_EndpointResponse struct {
 	EndpointResponse *EndpointResponse `protobuf:"bytes,2,opt,name=endpoint_response,json=endpointResponse,proto3,oneof"`
 }
 
-type MessageWrapper_ToRelay struct {
+type UnencryptedMessage_ToRelay struct {
 	ToRelay *ToRelayMessage `protobuf:"bytes,3,opt,name=to_relay,json=toRelay,proto3,oneof"`
 }
 
-type MessageWrapper_FromRelay struct {
+type UnencryptedMessage_FromRelay struct {
 	FromRelay *FromRelayMessage `protobuf:"bytes,4,opt,name=from_relay,json=fromRelay,proto3,oneof"`
 }
 
-type MessageWrapper_PingMessage struct {
+type UnencryptedMessage_PingMessage struct {
 	PingMessage *PingMessage `protobuf:"bytes,5,opt,name=ping_message,json=pingMessage,proto3,oneof"`
 }
 
-type MessageWrapper_PongMessage struct {
+type UnencryptedMessage_PongMessage struct {
 	PongMessage *PongMessage `protobuf:"bytes,6,opt,name=pong_message,json=pongMessage,proto3,oneof"`
 }
 
-func (*MessageWrapper_EndpointRequest) isMessageWrapper_MessageType() {}
+func (*UnencryptedMessage_EndpointRequest) isUnencryptedMessage_MessageType() {}
 
-func (*MessageWrapper_EndpointResponse) isMessageWrapper_MessageType() {}
+func (*UnencryptedMessage_EndpointResponse) isUnencryptedMessage_MessageType() {}
 
-func (*MessageWrapper_ToRelay) isMessageWrapper_MessageType() {}
+func (*UnencryptedMessage_ToRelay) isUnencryptedMessage_MessageType() {}
 
-func (*MessageWrapper_FromRelay) isMessageWrapper_MessageType() {}
+func (*UnencryptedMessage_FromRelay) isUnencryptedMessage_MessageType() {}
 
-func (*MessageWrapper_PingMessage) isMessageWrapper_MessageType() {}
+func (*UnencryptedMessage_PingMessage) isUnencryptedMessage_MessageType() {}
 
-func (*MessageWrapper_PongMessage) isMessageWrapper_MessageType() {}
+func (*UnencryptedMessage_PongMessage) isUnencryptedMessage_MessageType() {}
 
 type Address struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -523,12 +523,192 @@ func (x *PongMessage) GetNonce() uint32 {
 	return 0
 }
 
+type NoiseHandshakeInit struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	SenderStatic       []byte                 `protobuf:"bytes,1,opt,name=sender_static,json=senderStatic,proto3" json:"sender_static,omitempty"`                   // 32-byte static public key
+	Ephemeral          []byte                 `protobuf:"bytes,2,opt,name=ephemeral,proto3" json:"ephemeral,omitempty"`                                             // 32-byte ephemeral public key
+	EncryptedStatic    []byte                 `protobuf:"bytes,3,opt,name=encrypted_static,json=encryptedStatic,proto3" json:"encrypted_static,omitempty"`          // 48-byte encrypted static key
+	EncryptedTimestamp []byte                 `protobuf:"bytes,4,opt,name=encrypted_timestamp,json=encryptedTimestamp,proto3" json:"encrypted_timestamp,omitempty"` // 28-byte encrypted timestamp
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *NoiseHandshakeInit) Reset() {
+	*x = NoiseHandshakeInit{}
+	mi := &file_securemsg_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NoiseHandshakeInit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NoiseHandshakeInit) ProtoMessage() {}
+
+func (x *NoiseHandshakeInit) ProtoReflect() protoreflect.Message {
+	mi := &file_securemsg_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NoiseHandshakeInit.ProtoReflect.Descriptor instead.
+func (*NoiseHandshakeInit) Descriptor() ([]byte, []int) {
+	return file_securemsg_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *NoiseHandshakeInit) GetSenderStatic() []byte {
+	if x != nil {
+		return x.SenderStatic
+	}
+	return nil
+}
+
+func (x *NoiseHandshakeInit) GetEphemeral() []byte {
+	if x != nil {
+		return x.Ephemeral
+	}
+	return nil
+}
+
+func (x *NoiseHandshakeInit) GetEncryptedStatic() []byte {
+	if x != nil {
+		return x.EncryptedStatic
+	}
+	return nil
+}
+
+func (x *NoiseHandshakeInit) GetEncryptedTimestamp() []byte {
+	if x != nil {
+		return x.EncryptedTimestamp
+	}
+	return nil
+}
+
+type NoiseHandshakeResponse struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	SenderStatic     []byte                 `protobuf:"bytes,1,opt,name=sender_static,json=senderStatic,proto3" json:"sender_static,omitempty"`             // 32-byte static public key
+	Ephemeral        []byte                 `protobuf:"bytes,2,opt,name=ephemeral,proto3" json:"ephemeral,omitempty"`                                       // 32-byte ephemeral public key
+	EncryptedNothing []byte                 `protobuf:"bytes,3,opt,name=encrypted_nothing,json=encryptedNothing,proto3" json:"encrypted_nothing,omitempty"` // 16-byte encrypted empty payload
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *NoiseHandshakeResponse) Reset() {
+	*x = NoiseHandshakeResponse{}
+	mi := &file_securemsg_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NoiseHandshakeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NoiseHandshakeResponse) ProtoMessage() {}
+
+func (x *NoiseHandshakeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_securemsg_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NoiseHandshakeResponse.ProtoReflect.Descriptor instead.
+func (*NoiseHandshakeResponse) Descriptor() ([]byte, []int) {
+	return file_securemsg_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *NoiseHandshakeResponse) GetSenderStatic() []byte {
+	if x != nil {
+		return x.SenderStatic
+	}
+	return nil
+}
+
+func (x *NoiseHandshakeResponse) GetEphemeral() []byte {
+	if x != nil {
+		return x.Ephemeral
+	}
+	return nil
+}
+
+func (x *NoiseHandshakeResponse) GetEncryptedNothing() []byte {
+	if x != nil {
+		return x.EncryptedNothing
+	}
+	return nil
+}
+
+type NoiseTransportMessage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Counter       uint32                 `protobuf:"varint,1,opt,name=counter,proto3" json:"counter,omitempty"`                                 // Transport message counter
+	EncryptedData []byte                 `protobuf:"bytes,2,opt,name=encrypted_data,json=encryptedData,proto3" json:"encrypted_data,omitempty"` // Encrypted payload with 16-byte auth tag
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NoiseTransportMessage) Reset() {
+	*x = NoiseTransportMessage{}
+	mi := &file_securemsg_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NoiseTransportMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NoiseTransportMessage) ProtoMessage() {}
+
+func (x *NoiseTransportMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_securemsg_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NoiseTransportMessage.ProtoReflect.Descriptor instead.
+func (*NoiseTransportMessage) Descriptor() ([]byte, []int) {
+	return file_securemsg_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *NoiseTransportMessage) GetCounter() uint32 {
+	if x != nil {
+		return x.Counter
+	}
+	return 0
+}
+
+func (x *NoiseTransportMessage) GetEncryptedData() []byte {
+	if x != nil {
+		return x.EncryptedData
+	}
+	return nil
+}
+
 var File_securemsg_proto protoreflect.FileDescriptor
 
 const file_securemsg_proto_rawDesc = "" +
 	"\n" +
-	"\x0fsecuremsg.proto\x12\tsecuremsg\"\xa5\x03\n" +
-	"\x0eMessageWrapper\x12G\n" +
+	"\x0fsecuremsg.proto\x12\tsecuremsg\"\xa9\x03\n" +
+	"\x12UnencryptedMessage\x12G\n" +
 	"\x10endpoint_request\x18\x01 \x01(\v2\x1a.securemsg.EndpointRequestH\x00R\x0fendpointRequest\x12J\n" +
 	"\x11endpoint_response\x18\x02 \x01(\v2\x1b.securemsg.EndpointResponseH\x00R\x10endpointResponse\x126\n" +
 	"\bto_relay\x18\x03 \x01(\v2\x19.securemsg.ToRelayMessageH\x00R\atoRelay\x12<\n" +
@@ -558,7 +738,19 @@ const file_securemsg_proto_rawDesc = "" +
 	"\vPingMessage\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\rR\x05nonce\"#\n" +
 	"\vPongMessage\x12\x14\n" +
-	"\x05nonce\x18\x01 \x01(\rR\x05nonceB+Z)github.com/bajacc/tinescale/pkg/securemsgb\x06proto3"
+	"\x05nonce\x18\x01 \x01(\rR\x05nonce\"\xb3\x01\n" +
+	"\x12NoiseHandshakeInit\x12#\n" +
+	"\rsender_static\x18\x01 \x01(\fR\fsenderStatic\x12\x1c\n" +
+	"\tephemeral\x18\x02 \x01(\fR\tephemeral\x12)\n" +
+	"\x10encrypted_static\x18\x03 \x01(\fR\x0fencryptedStatic\x12/\n" +
+	"\x13encrypted_timestamp\x18\x04 \x01(\fR\x12encryptedTimestamp\"\x88\x01\n" +
+	"\x16NoiseHandshakeResponse\x12#\n" +
+	"\rsender_static\x18\x01 \x01(\fR\fsenderStatic\x12\x1c\n" +
+	"\tephemeral\x18\x02 \x01(\fR\tephemeral\x12+\n" +
+	"\x11encrypted_nothing\x18\x03 \x01(\fR\x10encryptedNothing\"X\n" +
+	"\x15NoiseTransportMessage\x12\x18\n" +
+	"\acounter\x18\x01 \x01(\rR\acounter\x12%\n" +
+	"\x0eencrypted_data\x18\x02 \x01(\fR\rencryptedDataB+Z)github.com/bajacc/tinescale/pkg/securemsgb\x06proto3"
 
 var (
 	file_securemsg_proto_rawDescOnce sync.Once
@@ -572,24 +764,27 @@ func file_securemsg_proto_rawDescGZIP() []byte {
 	return file_securemsg_proto_rawDescData
 }
 
-var file_securemsg_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_securemsg_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_securemsg_proto_goTypes = []any{
-	(*MessageWrapper)(nil),   // 0: securemsg.MessageWrapper
-	(*Address)(nil),          // 1: securemsg.Address
-	(*EndpointRequest)(nil),  // 2: securemsg.EndpointRequest
-	(*EndpointResponse)(nil), // 3: securemsg.EndpointResponse
-	(*ToRelayMessage)(nil),   // 4: securemsg.ToRelayMessage
-	(*FromRelayMessage)(nil), // 5: securemsg.FromRelayMessage
-	(*PingMessage)(nil),      // 6: securemsg.PingMessage
-	(*PongMessage)(nil),      // 7: securemsg.PongMessage
+	(*UnencryptedMessage)(nil),     // 0: securemsg.UnencryptedMessage
+	(*Address)(nil),                // 1: securemsg.Address
+	(*EndpointRequest)(nil),        // 2: securemsg.EndpointRequest
+	(*EndpointResponse)(nil),       // 3: securemsg.EndpointResponse
+	(*ToRelayMessage)(nil),         // 4: securemsg.ToRelayMessage
+	(*FromRelayMessage)(nil),       // 5: securemsg.FromRelayMessage
+	(*PingMessage)(nil),            // 6: securemsg.PingMessage
+	(*PongMessage)(nil),            // 7: securemsg.PongMessage
+	(*NoiseHandshakeInit)(nil),     // 8: securemsg.NoiseHandshakeInit
+	(*NoiseHandshakeResponse)(nil), // 9: securemsg.NoiseHandshakeResponse
+	(*NoiseTransportMessage)(nil),  // 10: securemsg.NoiseTransportMessage
 }
 var file_securemsg_proto_depIdxs = []int32{
-	2, // 0: securemsg.MessageWrapper.endpoint_request:type_name -> securemsg.EndpointRequest
-	3, // 1: securemsg.MessageWrapper.endpoint_response:type_name -> securemsg.EndpointResponse
-	4, // 2: securemsg.MessageWrapper.to_relay:type_name -> securemsg.ToRelayMessage
-	5, // 3: securemsg.MessageWrapper.from_relay:type_name -> securemsg.FromRelayMessage
-	6, // 4: securemsg.MessageWrapper.ping_message:type_name -> securemsg.PingMessage
-	7, // 5: securemsg.MessageWrapper.pong_message:type_name -> securemsg.PongMessage
+	2, // 0: securemsg.UnencryptedMessage.endpoint_request:type_name -> securemsg.EndpointRequest
+	3, // 1: securemsg.UnencryptedMessage.endpoint_response:type_name -> securemsg.EndpointResponse
+	4, // 2: securemsg.UnencryptedMessage.to_relay:type_name -> securemsg.ToRelayMessage
+	5, // 3: securemsg.UnencryptedMessage.from_relay:type_name -> securemsg.FromRelayMessage
+	6, // 4: securemsg.UnencryptedMessage.ping_message:type_name -> securemsg.PingMessage
+	7, // 5: securemsg.UnencryptedMessage.pong_message:type_name -> securemsg.PongMessage
 	1, // 6: securemsg.EndpointResponse.addresses:type_name -> securemsg.Address
 	7, // [7:7] is the sub-list for method output_type
 	7, // [7:7] is the sub-list for method input_type
@@ -604,12 +799,12 @@ func file_securemsg_proto_init() {
 		return
 	}
 	file_securemsg_proto_msgTypes[0].OneofWrappers = []any{
-		(*MessageWrapper_EndpointRequest)(nil),
-		(*MessageWrapper_EndpointResponse)(nil),
-		(*MessageWrapper_ToRelay)(nil),
-		(*MessageWrapper_FromRelay)(nil),
-		(*MessageWrapper_PingMessage)(nil),
-		(*MessageWrapper_PongMessage)(nil),
+		(*UnencryptedMessage_EndpointRequest)(nil),
+		(*UnencryptedMessage_EndpointResponse)(nil),
+		(*UnencryptedMessage_ToRelay)(nil),
+		(*UnencryptedMessage_FromRelay)(nil),
+		(*UnencryptedMessage_PingMessage)(nil),
+		(*UnencryptedMessage_PongMessage)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -617,7 +812,7 @@ func file_securemsg_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_securemsg_proto_rawDesc), len(file_securemsg_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
